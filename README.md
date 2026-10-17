@@ -73,7 +73,7 @@ This is a self-hosted, allowlisted workspace. Configure `OWNER_EMAIL` and `ALLOW
 
 Refresh tokens are encrypted with AES-256-GCM. Email bodies are processed in memory and sent to OpenAI for classification. Activity stores subjects and decision metadata with expiration timestamps; configure Firestore TTL policies as described in the deployment guide. The UI displays the latest 500 records in pages of 25.
 
-An optional recruiting-specific action can prepare a decline **draft**, never send it. It requires the single Recruiting choice and checks for prior replies, LinkedIn messages, and existing drafts. Review the draft text before enabling this action. Multiple-choice replacement disables incompatible recruiting drafts explicitly.
+An optional recruiting-specific action can prepare a decline **draft**, never send it. It requires the single Recruiting choice and checks for prior replies, LinkedIn messages, and existing drafts. Review the draft text before enabling this action; `DECLINE_REPLY_TEXT` can supply a custom reply. Multiple-choice replacement disables incompatible recruiting drafts explicitly.
 
 ## Deployment
 
@@ -96,3 +96,7 @@ The included container runs on Cloud Run. The [deployment guide](docs/deployment
 - [Gmail synchronization](https://developers.google.com/workspace/gmail/api/guides/sync)
 - [Pub/Sub with Cloud Run](https://docs.cloud.google.com/run/docs/tutorials/pubsub)
 - [OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions)
+
+## License
+
+No license has been selected. Package metadata is `UNLICENSED`.

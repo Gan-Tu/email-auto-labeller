@@ -10,6 +10,7 @@ import {
   type User,
 } from "./api";
 import { Dialog } from "./Dialog";
+import { sortLabels } from "./labels";
 import { ChoiceEditor } from "./ChoiceEditor";
 import { matchingLabel, newChoice, ruleKey, validateRule } from "./rules";
 type Field = "prompt" | "choices" | "threshold" | "enabled";
@@ -67,7 +68,7 @@ export function BatchRuleEditor({
           `${mailboxPath(email)}/labels`,
           { signal: controller.signal },
         );
-        return [email, result.labels] as const;
+        return [email, sortLabels(result.labels)] as const;
       }),
     )
       .then((values) => setLabels(Object.fromEntries(values)))

@@ -19,21 +19,25 @@ Configure Firestore TTL policies for activity and authentication records: decisi
 
 Provision and configure the initial Cloud Run service before using the deployment helper. Set its runtime service account, application environment, Secret Manager bindings, and allowed callers using the configuration above. The helper updates application code; it does not replace the initial resource setup.
 
-[`scripts/deploy.sh`](../scripts/deploy.sh) requires `PROJECT_ID`. `SERVICE_NAME` defaults to `email-auto-labeller`, and `REGION` defaults to `us-central1`. Existing runtime configuration and secrets are preserved. An explicit `PROCESSING_ENABLED` value changes processing state; omit it to retain the current state.
+[`scripts/deploy.sh`](../scripts/deploy.sh) requires `PROJECT_ID`. `SERVICE_NAME` defaults to `email-auto-labeller`, and `REGION` defaults to `us-central1`. Existing runtime configuration, secrets, and processing state are preserved. Exporting `PROCESSING_ENABLED` does not change the service through this helper. The script requires a clean, committed checkout so `RELEASE_SHA` identifies the deployed source.
 
 ```sh
 npm ci
 npm run check
 npm test
 npm run build
-PROJECT_ID=your-google-project PROCESSING_ENABLED=false scripts/deploy.sh
+PROJECT_ID=your-google-project scripts/deploy.sh
 ```
 
-After checking the staged application, enable processing deliberately:
+Configure staging with processing disabled directly on Cloud Run. After checking the staged application, enable it explicitly:
 
 ```sh
-PROJECT_ID=your-google-project PROCESSING_ENABLED=true scripts/deploy.sh
+gcloud run services update email-auto-labeller \
+  --project=your-google-project --region=us-central1 \
+  --update-env-vars=PROCESSING_ENABLED=true
 ```
+
+Use the same command with `PROCESSING_ENABLED=false` to disable background processing.
 
 Disabled processing pauses background classification and renewal; rule edits and deliberate dry-run tests still work.
 
@@ -52,6 +56,8 @@ Configure these trigger substitutions:
 Cloud Build supplies `PROJECT_ID` and `COMMIT_SHA`. Create the target Artifact Registry repository and configure the trigger's build identity to write images, deploy the intended Cloud Run service, and act as its runtime identity. Keep API/OAuth credentials in Secret Manager; the build does not need a GitHub secret containing a Google service-account key.
 
 The pipeline installs dependencies, runs type checks, tests, and the application build, then builds and pushes a Docker image. It deploys that image and its `RELEASE_SHA` to Cloud Run. Deployment updates the image and release identifier only: runtime environment, secret bindings, and processing state stay as configured on the service.
+
+The separate [GitHub CI workflow](../.github/workflows/ci.yml) runs checks on pull requests and pushes to `main`; it does not deploy.
 
 Verify the repository connection, branch filter, trigger configuration, and a completed build before relying on automatic deployment. Read back the serving revision and `/health` release identifier after a push. Keep deployment permissions limited to maintainers who should be able to change the running app.
 
@@ -78,7 +84,7 @@ Before relying on automatic labeling:
 - Exercise several rules on one message and several choices within a rule. Verify batch edits preserve unselected fields and mailbox-specific mappings.
 - Verify catch-up and watch renewal at the mailbox level, and confirm transient failures recover without repeated classification or duplicate drafts.
 
-The verification scripts in `scripts/` use explicitly configured test accounts and evidence paths. Inspect their arguments before use. Some live checks insert disposable messages directly into test mailboxes and clean them up afterward; they do not send email. Keep test evidence and local operator notes outside tracked source.
+The API smoke verifier requires exactly two `VERIFY_EMAILS` addresses. The live delivery verifier checks all configured allowed accounts by default; `--email` explicitly narrows that scope. The generalized rule verifier requires `--email` or `VERIFY_EMAIL`. Evidence defaults to ignored `.local/` paths. Inspect each script’s arguments before use. Some live checks insert disposable messages directly into test mailboxes and clean them up afterward; they do not send email. Keep test evidence and local operator notes outside tracked source.
 
 ## Migrate a recruiting-only installation
 
@@ -107,7 +113,7 @@ For cutover:
 
 1. Pause the original scheduler jobs and disable the old subscription's delivery, retaining the backlog. Wait for in-flight workers to finish.
 2. Run `scripts/migrate-recruiting.ts cutover`, then `verify`, using the same protected environment. Cutover checks old delivery and worker leases before copying final state.
-3. Enable destination processing, direct authenticated push delivery and scheduler jobs to the new service, and verify live labeling.
+3. Enable destination processing explicitly with `gcloud run services update ... --update-env-vars=PROCESSING_ENABLED=true`, direct authenticated push delivery and scheduler jobs to the new service, and verify live labeling.
 4. Remove the original compute service only after destination delivery and Gmail readback pass. Retain OAuth/topic dependencies still needed by imported authorizations.
 
 Stage/cutover refuse to overwrite a destination that already contains processed message jobs. Do not rerun them after destination processing begins. Once rules or account state intentionally change, source-parity verification is no longer a meaningful completion check; inspect the current destination directly.

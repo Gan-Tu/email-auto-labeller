@@ -21,6 +21,7 @@ import {
 import { Dialog } from "./Dialog";
 import { ChoiceEditor } from "./ChoiceEditor";
 import { cleanRule, newChoice, validateRule } from "./rules";
+import { sortLabels } from "./labels";
 const recruitingDescription =
   "Genuine, personally directed outreach or follow-up about recruiting the mailbox owner for an employment opportunity.";
 export function RuleEditor({
@@ -72,7 +73,7 @@ export function RuleEditor({
     api<{ labels: GmailLabel[] }>(`${mailboxPath(email)}/labels`, {
       signal: controller.signal,
     })
-      .then((r) => setLabels(r.labels))
+      .then((r) => setLabels(sortLabels(r.labels)))
       .catch((e) => {
         if (!controller.signal.aborted) setLabelError(e.message);
       })
