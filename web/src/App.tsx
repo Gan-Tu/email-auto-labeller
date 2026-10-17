@@ -172,7 +172,7 @@ export default function App() {
       <header className="app-sidebar">
         <a className="brand" href="#rules">
           <span className="brand-icon">
-            <Mail size={20} />
+            <img src="/logo.png" alt="" width="40" height="40" />
           </span>
           <span>
             Email Auto
@@ -303,7 +303,7 @@ export default function App() {
         ) : !user ? (
           <section className="welcome">
             <div className="welcome-mark">
-              <Mail size={35} />
+              <img src="/logo.png" alt="" width="64" height="64" />
             </div>
             <h1>Your inbox, your rules.</h1>
             <p>
