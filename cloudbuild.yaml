@@ -1,0 +1,65 @@
+# Configure a GitHub push trigger restricted to ^main$. Never use this deployment
+# pipeline for fork pull requests. Runtime secrets/configuration stay in Cloud Run.
+steps:
+  - id: validate
+    name: node:22
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        npm ci
+        npm run check
+        npm test
+        npm run build
+  - id: image
+    name: gcr.io/cloud-builders/docker
+    args:
+      [
+        build,
+        -t,
+        "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA",
+        .,
+      ]
+  - id: publish
+    name: gcr.io/cloud-builders/docker
+    args:
+      [
+        push,
+        "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA",
+      ]
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        # Update an existing service. Do not change IAM, secrets, mailbox allowlists,
+        # or PROCESSING_ENABLED as a side effect of a source-code push.
+        gcloud run services update '${_SERVICE_NAME}' \
+          --project='$PROJECT_ID' --region='${_REGION}' \
+          --image='${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA' \
+          --update-env-vars='RELEASE_SHA=$COMMIT_SHA' --quiet
+  - id: verify
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        service_url="$$(gcloud run services describe '${_SERVICE_NAME}' --project='$PROJECT_ID' --region='${_REGION}' --format='value(status.url)')"
+        export SERVICE_URL="$$service_url" EXPECTED_RELEASE='$COMMIT_SHA'
+        python3 - <<'PY'
+        import json, os, urllib.request
+        with urllib.request.urlopen(os.environ['SERVICE_URL'] + '/health', timeout=30) as response:
+            health = json.load(response)
+        assert health.get('ok') is True and health.get('version') == os.environ['EXPECTED_RELEASE'], health
+        print('Verified deployed release:', health['version'])
+        PY
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA"
+substitutions:
+  _SERVICE_NAME: email-auto-labeller
+  _REGION: us-central1
+  _ARTIFACT_REPOSITORY: cloud-run-source-deploy
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s

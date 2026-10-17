@@ -1,0 +1,50 @@
+{
+  "name": "email-auto-labeller",
+  "version": "1.0.0",
+  "description": "Realtime Gmail classification with mailbox-specific multiple-choice rules",
+  "scripts": {
+    "dev": "vite",
+    "server": "tsx watch server/index.ts",
+    "build": "tsc && tsc -p tsconfig.web.json && vite build",
+    "start": "node dist/server/index.js",
+    "test": "vitest run",
+    "check": "tsc --noEmit && tsc -p tsconfig.web.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@google-cloud/firestore": "^9.3.1",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.2.1",
+    "google-auth-library": "^11.1.0",
+    "helmet": "^8.3.0",
+    "html-to-text": "^10.0.1",
+    "lucide-react": "^1.52.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^5.0.6",
+    "@types/html-to-text": "^9.0.4",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/supertest": "^7.2.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "prettier": "^3.9.9",
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
