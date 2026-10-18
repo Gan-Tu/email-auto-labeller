@@ -19,6 +19,9 @@ export function showOAuthDisclosure(req: Request, res: Response) {
     res.status(400).send("Unsupported app URL");
     return;
   }
+  // Chrome sends Origin: null on a form POST from a no-referrer document.
+  // Preserve same-origin CSRF validation without sending referrers to Google.
+  res.set("Referrer-Policy", "same-origin");
   const token = randomBytes(32).toString("hex");
   res.cookie(cookieName, token, cookieOptions(origin.startsWith("https:")));
   res.type("html").send(

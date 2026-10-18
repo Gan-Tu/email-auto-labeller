@@ -184,6 +184,7 @@ it("requires a prominent data-sharing disclosure before OAuth", async () => {
     .set("X-Forwarded-Proto", "https");
   expect(r.status).toBe(200);
   expect(r.text).toContain("What is shared with OpenAI");
+  expect(r.headers["referrer-policy"]).toBe("same-origin");
   expect(r.text).toContain('name="dataSharingConsent" value="yes" required');
   expect(r.text).toContain('href="/privacy"');
   expect(state.docs.size).toBe(0);
