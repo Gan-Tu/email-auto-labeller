@@ -5,6 +5,7 @@ The interface is organized around three tasks: defining rules, inspecting decisi
 - **Rules** is the default workspace. A desktop navigation rail becomes a bottom tab bar on mobile.
 - The editor keeps the classification prompt freeform and makes possible answers structured: choice name, meaning, and a Gmail label from the selected mailbox.
 - Label menus keep pinned `!` names first, group parents with nested labels, and sort dates/numbers naturally. Decorative emoji are ignored for ordering while displayed names and label IDs remain unchanged.
+- Every rule exposes protected Gmail labels and optional reply drafts. Drafts select explicit choices and editable plain text; removed choices require correction before saving, and batch replacement requires confirmation before disabling drafts.
 - **No match** is always visible and cannot be removed. It never applies a label.
 - The test panel uses unsaved settings and clearly distinguishes a predicted label from an applied label. Changing the rule or input invalidates an earlier test result.
 - Batch editing uses **Choose changes → Map labels → Review**. All fields default to Keep current. Different prompt variants require overwrite acknowledgement; each mailbox retains its own explicit label mappings.

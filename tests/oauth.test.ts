@@ -75,11 +75,27 @@ afterEach(() => {
   config.appOrigins = saved;
   vi.restoreAllMocks();
 });
-const start = (origin: string) =>
-  request(app)
+const start = async (origin: string) => {
+  const disclosure = await request(app)
     .get("/auth/google")
     .set("Host", new URL(origin).host)
     .set("X-Forwarded-Proto", "https");
+  const token = disclosure.text.match(
+    /name="consentToken" value="([a-f0-9]+)"/,
+  )?.[1];
+  return request(app)
+    .post("/auth/google")
+    .set("Host", new URL(origin).host)
+    .set("X-Forwarded-Proto", "https")
+    .set("Origin", origin)
+    .set("Cookie", disclosure.headers["set-cookie"][0].split(";")[0])
+    .type("form")
+    .send({ consentToken: token, dataSharingConsent: "yes" });
+};
+const oauthCookie = (response: any) =>
+  response.headers["set-cookie"]
+    .find((value: string) => value.startsWith("oauth="))
+    .split(";")[0];
 it.each(origins)(
   "binds OAuth to its starting origin and preserves the custom prompt: %s",
   async (origin) => {
@@ -111,7 +127,7 @@ it.each(origins)(
       .get("/auth/google/callback")
       .set("Host", new URL(origin).host)
       .set("X-Forwarded-Proto", "https")
-      .set("Cookie", first.headers["set-cookie"][0].split(";")[0])
+      .set("Cookie", oauthCookie(first))
       .query({ state: url.searchParams.get("state"), code: "test-code" });
     expect(callback.headers.location).toBe("/?connected=1");
     expect(exchange).toHaveBeenCalledWith({
@@ -122,6 +138,8 @@ it.each(origins)(
       "Only label invitations to staff engineering roles.",
     );
     expect(state.account).not.toHaveProperty("openaiRouting");
+    expect(state.account.dataConsentVersion).toBe("2026-10-18");
+    expect(state.account.dataConsentAt).toBeGreaterThan(0);
     expect(
       [...state.docs.keys()].filter((k) => k.startsWith("oauth/")),
     ).toHaveLength(0);
@@ -135,7 +153,7 @@ it("rejects a callback on another host before exchanging the authorization code"
     .get("/auth/google/callback")
     .set("Host", new URL(origins[1]).host)
     .set("X-Forwarded-Proto", "https")
-    .set("Cookie", first.headers["set-cookie"][0].split(";")[0])
+    .set("Cookie", oauthCookie(first))
     .query({ state: url.searchParams.get("state"), code: "test-code" });
   expect(r.headers.location).toBe("/?error=connection_failed");
   expect(exchange).not.toHaveBeenCalled();
@@ -153,4 +171,53 @@ it("keeps machine-to-machine authentication bound to both approved audiences and
     audience: origins,
   });
   expect(await verifyService(req, "wrong@example.com")).toBe(false);
+  expect(
+    await verifyService(req, ["old@example.com", "push@example.com"]),
+  ).toBe(true);
+  expect(await verifyService(req, [])).toBe(false);
+});
+
+it("requires a prominent data-sharing disclosure before OAuth", async () => {
+  const r = await request(app)
+    .get("/auth/google")
+    .set("Host", new URL(origins[0]).host)
+    .set("X-Forwarded-Proto", "https");
+  expect(r.status).toBe(200);
+  expect(r.text).toContain("What is shared with OpenAI");
+  expect(r.text).toContain('name="dataSharingConsent" value="yes" required');
+  expect(r.text).toContain('href="/privacy"');
+  expect(state.docs.size).toBe(0);
+});
+it.each([{}, { consentToken: "a".repeat(64), dataSharingConsent: "yes" }])(
+  "rejects direct or forged consent submissions",
+  async (body) => {
+    const r = await request(app)
+      .post("/auth/google")
+      .set("Host", new URL(origins[0]).host)
+      .set("X-Forwarded-Proto", "https")
+      .set("Origin", origins[0])
+      .type("form")
+      .send(body);
+    expect(r.status).toBe(400);
+    expect(state.docs.size).toBe(0);
+  },
+);
+it("rejects cross-origin disclosure submissions", async () => {
+  const disclosure = await request(app)
+    .get("/auth/google")
+    .set("Host", new URL(origins[0]).host)
+    .set("X-Forwarded-Proto", "https");
+  const token = disclosure.text.match(
+    /name="consentToken" value="([a-f0-9]+)"/,
+  )?.[1];
+  const r = await request(app)
+    .post("/auth/google")
+    .set("Host", new URL(origins[0]).host)
+    .set("X-Forwarded-Proto", "https")
+    .set("Origin", "https://untrusted.example")
+    .set("Cookie", disclosure.headers["set-cookie"][0].split(";")[0])
+    .type("form")
+    .send({ consentToken: token, dataSharingConsent: "yes" });
+  expect(r.status).toBe(400);
+  expect(state.docs.size).toBe(0);
 });

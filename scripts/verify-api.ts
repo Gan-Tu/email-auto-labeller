@@ -17,10 +17,19 @@ type EditableRule = {
   threshold: number;
   scope: "message";
   choices: Choice[];
-  draftReplies: boolean;
-  preserveJobSearch: boolean;
+  protectedLabels: {
+    labelId: string;
+    labelName: string;
+    includeChildren: boolean;
+  }[];
+  replyDraft: { choiceIds: string[]; body: string } | null;
 };
-type Rule = EditableRule & { id: string; email: string; version: number };
+type Rule = EditableRule & {
+  id: string;
+  email: string;
+  version: number;
+  draftReplies?: boolean;
+};
 const base = process.env.VERIFY_BASE_URL ?? "http://localhost:8080";
 const output =
   process.env.VERIFY_EVIDENCE_PATH ?? resolve(".local/api-smoke.json");
@@ -88,8 +97,8 @@ const editable = ({
   threshold,
   scope,
   choices,
-  draftReplies,
-  preserveJobSearch,
+  protectedLabels,
+  replyDraft,
 }: Rule): EditableRule => ({
   name,
   prompt,
@@ -97,14 +106,33 @@ const editable = ({
   threshold,
   scope,
   choices,
-  draftReplies,
-  preserveJobSearch,
+  protectedLabels,
+  replyDraft,
 });
 async function readRules() {
   const all: Rule[] = (await api("/api/rules")).rules;
   return created.map(({ email, id }) => {
     const found = all.find((r) => r.email === email && r.id === id);
     assert.ok(found, `Created rule ${id} is available`);
+    assert.equal(
+      found.enabled,
+      false,
+      "Disposable API rules must stay disabled",
+    );
+    assert.equal(
+      found.replyDraft,
+      null,
+      "Disposable API rules must not prepare reply drafts",
+    );
+    assert.ok(
+      !found.draftReplies,
+      "Disposable API rules must not enable legacy drafts",
+    );
+    assert.deepEqual(
+      found.protectedLabels,
+      [],
+      "Disposable protections stay explicit and empty",
+    );
     return found;
   });
 }
@@ -183,14 +211,18 @@ try {
       threshold: 0.5,
       scope: "message",
       choices: choices(selected[i]),
-      draftReplies: false,
-      preserveJobSearch: false,
+      protectedLabels: [],
+      replyDraft: null,
     };
     const result = await api(rulesUrl(inboxes[i]), "POST", rule, 201);
-    assert.equal(result.rule.enabled, false);
+    // Record successful creation before assertions so cleanup still owns a failed fixture.
     created.push({ email: inboxes[i], id: result.rule.id });
     evidence.createdRules = created;
     await persist();
+    assert.equal(result.rule.enabled, false);
+    assert.equal(result.rule.replyDraft, null);
+    assert.ok(!result.rule.draftReplies);
+    assert.deepEqual(result.rule.protectedLabels, []);
   }
   let saved = await readRules();
   const prompt =

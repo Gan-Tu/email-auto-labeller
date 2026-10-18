@@ -311,6 +311,11 @@ export default function App() {
               <br />
               Connect every answer to the right Gmail label.
             </p>
+            <p className="welcome-disclosure">
+              Email bodies and headers, including conversation context, are sent
+              to OpenAI for classification. Read our{" "}
+              <a href="/privacy">Privacy Policy</a> before connecting Gmail.
+            </p>
             <a className="primary" href="/auth/google">
               Continue with Google
               <ArrowRight size={17} />
@@ -323,9 +328,9 @@ export default function App() {
               <span>Stay organized</span>
             </div>
             <small>
-              Email content is sent to OpenAI for classification.
-              <br />
               Your read status stays unchanged. This app never sends email.
+              <br />
+              Reply drafts are created only when enabled in a rule.
             </small>
           </section>
         ) : !loaded ? (
@@ -684,7 +689,12 @@ export default function App() {
         )}
         <footer>
           <span>Email Auto Labeller</span>
-          <span>Prompts → choices → Gmail labels</span>
+          <nav className="footer-links" aria-label="Information and support">
+            <a href="/about">About</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/terms">Terms</a>
+            <a href="/support">Support</a>
+          </nav>
         </footer>
       </main>
       {selectedAccount && user ? (

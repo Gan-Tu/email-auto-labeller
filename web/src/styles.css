@@ -914,6 +914,8 @@ td small {
 }
 .app-main > footer {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
   gap: 20px;
   color: #77847b;
@@ -921,6 +923,45 @@ td small {
   border-top: 1px solid var(--border);
   margin-top: 50px;
   padding-top: 19px;
+}
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  font-size: 11px;
+}
+.footer-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+}
+.welcome > .welcome-disclosure {
+  max-width: 440px;
+  margin: 0 auto 22px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.welcome-disclosure a,
+.connection-guidance a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.connection-guidance {
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+  margin: 22px 0;
+}
+.connection-guidance h3 {
+  font-size: 13px;
+  margin-bottom: 9px;
+}
+.connection-guidance p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.8;
+  margin-bottom: 10px;
 }
 .signed-out-shell footer {
   max-width: 1150px;
@@ -1204,18 +1245,66 @@ td small {
   line-height: 1.7;
   margin-top: 4px;
 }
-.advanced-settings {
-  font-size: 11px;
-  color: #7b8d7e;
-  border-top: 1px solid #eef1eb;
-  padding-top: 14px;
-  margin-top: 18px;
+.behavior-section {
+  border-top: 1px solid var(--border);
+  margin-top: 22px;
+  padding-top: 19px;
 }
-.advanced-settings summary {
+.behavior-section h4 {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0 0 9px;
+}
+.behavior-section > .hint {
+  margin-bottom: 15px;
+}
+.protected-label-row {
+  padding: 12px 0;
+  border-bottom: 1px solid #edf0eb;
+  margin-bottom: 13px;
+}
+.protected-label-heading {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.protected-label-heading > .field {
+  flex: 1;
+  margin-bottom: 0;
+}
+.protected-label-heading > .icon-button {
+  margin-top: 25px;
+}
+.protected-label-row > .check-field {
+  margin: 11px 0 0;
+  font-size: 11px;
+}
+.draft-choice-options {
+  padding: 0;
+  margin: 18px 0;
+  border: 0;
+}
+.draft-choice-options > legend {
+  font-size: 11px;
   font-weight: 550;
+  margin-bottom: 3px;
 }
-.advanced-settings .check-field {
-  font-size: 11px;
+.draft-choice-options .check-field {
+  margin: 10px 0;
+}
+.draft-choice-warning {
+  margin: 15px 0;
+}
+.draft-choice-warning p {
+  margin-bottom: 9px;
+}
+.draft-choice-warning > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 7px;
 }
 .test-panel {
   background: #f7f9f6;
@@ -2212,8 +2301,19 @@ td small {
     font-size: 9px;
   }
   .app-main > footer {
-    font-size: 9px;
-    gap: 12px;
+    font-size: 10px;
+    gap: 5px 12px;
+  }
+  .footer-links {
+    width: 100%;
+    gap: 4px 16px;
+  }
+  .footer-links a {
+    min-height: 40px;
+    min-width: 44px;
+  }
+  .welcome > .welcome-disclosure {
+    font-size: 12px;
   }
   .empty {
     padding: 38px 17px;

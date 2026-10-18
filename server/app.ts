@@ -1,4 +1,6 @@
 import express from "express";
+import { mountPublicPages } from "./public-pages.js";
+import { showOAuthDisclosure } from "./oauth-disclosure.js";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { z } from "zod";
@@ -20,7 +22,6 @@ import {
   recentDecisions,
   withAccountLock,
   BusyError,
-  listRules,
 } from "./store.js";
 import { Gmail } from "./gmail.js";
 import { syncAccount, renewAccount } from "./worker.js";
@@ -36,6 +37,7 @@ import {
   patchRuleSchema,
   batchRuleSchema,
   validateRule,
+  listRulesForAccount,
 } from "./rules.js";
 import {
   ACTIVITY_LIMIT,
@@ -66,6 +68,7 @@ export function createApp() {
           connectSrc: ["'self'"],
           objectSrc: ["'none'"],
           frameAncestors: ["'none'"],
+          formAction: ["'self'", "https://accounts.google.com"],
         },
       },
     }),
@@ -79,7 +82,7 @@ export function createApp() {
     }),
   );
   app.post("/hooks/gmail", async (req, res) => {
-    if (!(await verifyService(req, config.pushEmail))) {
+    if (!(await verifyService(req, config.pushEmails ?? config.pushEmail))) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
@@ -129,7 +132,13 @@ export function createApp() {
     },
     loadSession,
   );
-  app.get("/auth/google", startOAuth);
+  mountPublicPages(app);
+  app.get("/auth/google", showOAuthDisclosure);
+  app.post(
+    "/auth/google",
+    express.urlencoded({ extended: false, limit: "4kb" }),
+    startOAuth,
+  );
   app.get("/auth/google/callback", finishOAuth);
   app.get("/api/session", (req, res) =>
     res.json({
@@ -158,7 +167,7 @@ export function createApp() {
     );
     res.json({
       rules: (
-        await Promise.all(accounts.map((a) => listRules(a.email)))
+        await Promise.all(accounts.map((a) => listRulesForAccount(a)))
       ).flat(),
       defaultPrompt: RECRUITING_PROMPT,
     });
@@ -293,16 +302,16 @@ export function createApp() {
     });
   });
   app.patch("/api/accounts/:email/rules/:id", csrf, async (req, res) => {
-    const { expectedVersion, choices, ...changes } = patchRuleSchema.parse(
-      req.body,
-    );
+    const { expectedVersion, choices, protectedLabels, ...changes } =
+      patchRuleSchema.parse(req.body);
     const batch = batchRuleSchema.parse({
       targets: [
         {
           email: String(req.params.email),
           ruleId: String(req.params.id),
           expectedVersion,
-          ...(choices ? { choices } : {}),
+          ...(choices !== undefined ? { choices } : {}),
+          ...(protectedLabels !== undefined ? { protectedLabels } : {}),
         },
       ],
       changes,

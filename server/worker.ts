@@ -1,6 +1,7 @@
 import { Gmail, GmailError, GmailContentError, header } from "./gmail.js";
 import { classifyRules, NO_MATCH } from "./classifier.js";
 import { config } from "./config.js";
+import { normalizeRuleBehavior } from "./rule-behavior.js";
 import {
   accountRef,
   getAccount,
@@ -27,8 +28,6 @@ import type {
   MessageJob,
   RuleExecution,
 } from "./types.js";
-export const normalizeLabel = (s: string) =>
-  s.toLowerCase().replace(/[^a-z0-9]/g, "");
 const excludedMailLabels: Record<string, string> = {
   SENT: "Sent mail",
   DRAFT: "Draft",
@@ -55,20 +54,27 @@ export const latestMessage = (messages: Message[]) => {
 const address = (s: string) =>
   (s.match(/<([^<>]+)>/)?.[1] ?? s).trim().toLowerCase();
 
-async function createDecline(
+async function createReplyDraft(
   gmail: Gmail,
   thread: Thread,
-  enabled: boolean,
+  draft: Rule["replyDraft"],
+  choiceId: string,
   classifiedMessageIds: string[],
 ): Promise<Decision["draft"]> {
-  if (!enabled) return "skipped";
+  if (!draft?.choiceIds.includes(choiceId)) return "skipped";
   if (
     thread.messages.some(
       (m) =>
         m.labelIds?.some((id) => id === "SENT" || id === "DRAFT") ||
         address(header(m, "from")) === gmail.account.email ||
         /linkedin\.com/i.test(header(m, "from")) ||
-        /linkedin (inmail|message)/i.test(header(m, "subject")),
+        /linkedin (inmail|message)/i.test(header(m, "subject")) ||
+        /(?:^|[<\s])(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|mailer-daemon)@/i.test(
+          header(m, "from"),
+        ) ||
+        (!!header(m, "auto-submitted") &&
+          header(m, "auto-submitted").toLowerCase() !== "no") ||
+        /^(bulk|list|junk)$/i.test(header(m, "precedence")),
     )
   )
     return "skipped";
@@ -115,7 +121,7 @@ async function createDecline(
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: base64",
     "",
-    Buffer.from(config.declineReplyText).toString("base64"),
+    Buffer.from(draft.body).toString("base64"),
   ].join("\r\n");
   try {
     const draft = await gmail.request<{ id: string }>("drafts", "POST", {
@@ -183,15 +189,43 @@ export function ruleProtectsThread(
   thread: Thread,
   labels: Label[],
 ) {
-  if (!rule.preserveJobSearch) return false;
-  const protectedIds = new Set(
-    labels
-      .filter((l) => normalizeLabel(l.name).startsWith("jobsearch"))
-      .map((l) => l.id),
-  );
+  const protectedLabels =
+    normalizeRuleBehavior(rule, labels, config.declineReplyText)
+      .protectedLabels ?? [];
+  const protectedIds = new Set<string>();
+  for (const protection of protectedLabels) {
+    protectedIds.add(protection.labelId);
+    if (!protection.includeChildren) continue;
+    // IDs survive renaming; use the current name to find slash-delimited descendants.
+    const parent = labels.find((label) => label.id === protection.labelId);
+    if (!parent) continue;
+    for (const label of labels) {
+      if (label.name.startsWith(parent.name + "/")) protectedIds.add(label.id);
+    }
+  }
   return thread.messages.some((m) =>
     m.labelIds?.some((id) => protectedIds.has(id)),
   );
+}
+async function failMissingProtection(
+  execution: RuleExecution,
+  labels: Label[],
+): Promise<boolean> {
+  const missing = execution.rule.protectedLabels?.find(
+    (protection) =>
+      !labels.some(
+        (label) => label.id === protection.labelId && label.type !== "system",
+      ),
+  );
+  if (!missing) return false;
+  const reason = `Protected label unavailable: ${missing.labelName}. Update the rule before processing future messages.`;
+  await recordRuleError(execution.rule, reason);
+  await completeExecution(execution, {
+    ...decisionFor(execution),
+    outcome: "failed",
+    reason,
+  });
+  return true;
 }
 async function applyPrediction(
   gmail: Gmail,
@@ -253,10 +287,11 @@ async function applyPrediction(
     await completeExecution(execution, decision);
     return;
   }
+  if (await failMissingProtection(execution, labels)) return;
   // Recheck current user labels and exclusions before each external action. Never remove labels.
   const current = await gmail.thread(execution.threadId);
   if (ruleProtectsThread(execution.rule, current, labels)) {
-    decision.reason = "Protected Job Search label";
+    decision.reason = "Protected label";
     await completeExecution(execution, decision);
     return;
   }
@@ -287,10 +322,12 @@ async function applyPrediction(
   decision.label = target.name;
   decision.labelId = target.id;
   // Draft intent reservations make any retry after an ambiguous draft write safe.
-  decision.draft = await createDecline(
+  decision.draft = await createReplyDraft(
     gmail,
     current,
-    execution.rule.draftReplies,
+    normalizeRuleBehavior(execution.rule, labels, config.declineReplyText)
+      .replyDraft,
+    choice.id,
     execution.targetMessageIds ?? [],
   );
   await completeExecution(execution, decision);
@@ -362,8 +399,10 @@ export async function processJob(
         .map((label) => excludedMailLabels[label])
         .join(" · ");
       await completeExecution(execution, decision);
+    } else if (await failMissingProtection(execution, labels)) {
+      // Missing configured protections stop this rule, without blocking sibling rules.
     } else if (ruleProtectsThread(execution.rule, thread, labels)) {
-      decision.reason = "Protected Job Search label";
+      decision.reason = "Protected label";
       await completeExecution(execution, decision);
     } else {
       execution.targetMessageIds = (

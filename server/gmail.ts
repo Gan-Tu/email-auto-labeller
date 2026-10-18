@@ -1,6 +1,6 @@
 import { OAuth2Client } from "google-auth-library";
 import { convert } from "html-to-text";
-import { config, requireEnv } from "./config.js";
+import { config } from "./config.js";
 import { decrypt } from "./crypto.js";
 import type { Account, GmailPart, Label, Message, Thread } from "./types.js";
 import { fitThreadContext } from "./context.js";
@@ -24,28 +24,100 @@ export const findLabel = (labels: Label[], name: string) =>
     (l) =>
       l.type !== "system" && canonicalLabel(l.name) === canonicalLabel(name),
   );
+type GmailTopics = Pick<
+  typeof config,
+  "topic" | "previousWebTopic" | "legacyTopic"
+>;
+interface GmailClientConfiguration {
+  kind: "current" | "previous" | "legacy";
+  clientId: string;
+  clientSecret: string;
+  topic: string;
+}
+/** Resolve both token-refresh credentials and the Gmail watch topic as one immutable pair. */
+export function resolveGmailClient(
+  account: Pick<Account, "clientType" | "oauthClientId">,
+  env: NodeJS.ProcessEnv = process.env,
+  topics: GmailTopics = config,
+): GmailClientConfiguration {
+  const required = (name: string) => {
+    const value = env[name]?.trim();
+    if (!value) throw new Error(`Missing configuration: ${name}`);
+    return value;
+  };
+  if (account.clientType === "legacy")
+    return {
+      kind: "legacy",
+      clientId: required("LEGACY_GOOGLE_CLIENT_ID"),
+      clientSecret: required("LEGACY_GOOGLE_CLIENT_SECRET"),
+      topic: topics.legacyTopic || topics.previousWebTopic || topics.topic,
+    };
+  const currentId = required("GOOGLE_CLIENT_ID");
+  const previousId = env.PREVIOUS_WEB_GOOGLE_CLIENT_ID?.trim();
+  const previousSecret = env.PREVIOUS_WEB_GOOGLE_CLIENT_SECRET?.trim();
+  if (!!previousId !== !!previousSecret)
+    throw new Error(
+      "Previous web OAuth client ID and secret must be configured together",
+    );
+  if (
+    account.oauthClientId === currentId ||
+    (account.oauthClientId === undefined && !previousId)
+  )
+    return {
+      kind: "current",
+      clientId: currentId,
+      clientSecret: required("GOOGLE_CLIENT_SECRET"),
+      topic: topics.topic,
+    };
+  if (
+    previousId &&
+    (account.oauthClientId === undefined ||
+      account.oauthClientId === previousId)
+  ) {
+    if (!topics.previousWebTopic)
+      throw new Error("Previous web Gmail topic is not configured");
+    return {
+      kind: "previous",
+      clientId: previousId,
+      clientSecret: previousSecret!,
+      topic: topics.previousWebTopic,
+    };
+  }
+  throw new Error(
+    "Reconnect Gmail: this account's OAuth client is not configured",
+  );
+}
+export function usesCurrentWebClient(
+  account: Pick<Account, "clientType" | "oauthClientId">,
+): boolean {
+  return (
+    account.clientType === "web" &&
+    resolveGmailClient(account).kind === "current"
+  );
+}
 export class Gmail {
   auth: OAuth2Client;
   deadline?: number;
+  readonly topic: string;
   constructor(public account: Account) {
-    const prefix = account.clientType === "legacy" ? "LEGACY_GOOGLE" : "GOOGLE";
-    this.auth = new OAuth2Client(
-      requireEnv(`${prefix}_CLIENT_ID`),
-      requireEnv(`${prefix}_CLIENT_SECRET`),
-    );
+    const client = resolveGmailClient(account);
+    this.topic = client.topic;
+    this.auth = new OAuth2Client(client.clientId, client.clientSecret);
     this.auth.setCredentials({
       refresh_token: decrypt(account.refreshToken, account.email),
     });
   }
   async request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-    if (this.deadline && this.deadline - Date.now() <= 1000) throw new Error("Processing deadline reached");
+    if (this.deadline && this.deadline - Date.now() <= 1000)
+      throw new Error("Processing deadline reached");
     let token: string | null | undefined;
     try {
       token = (await this.auth.getAccessToken()).token;
     } catch {
       throw new GmailError(401);
     }
-    if (this.deadline && this.deadline - Date.now() <= 1000) throw new Error("Processing deadline reached");
+    if (this.deadline && this.deadline - Date.now() <= 1000)
+      throw new Error("Processing deadline reached");
     const r = await fetch(
       `https://gmail.googleapis.com/gmail/v1/users/me/${path}`,
       {
@@ -55,7 +127,12 @@ export class Gmail {
           "Content-Type": "application/json",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(Math.max(1, Math.min(30000, this.deadline ? this.deadline - Date.now() : 30000))),
+        signal: AbortSignal.timeout(
+          Math.max(
+            1,
+            Math.min(30000, this.deadline ? this.deadline - Date.now() : 30000),
+          ),
+        ),
       },
     );
     if (!r.ok) throw new GmailError(r.status);
@@ -77,7 +154,7 @@ export class Gmail {
       "watch",
       "POST",
       {
-        topicName: config.topic,
+        topicName: this.topic,
         labelFilterBehavior: "exclude",
         labelIds: ["SPAM", "TRASH"],
       },
@@ -129,8 +206,13 @@ export class Gmail {
         const charset =
           contentType.match(/charset\s*=\s*["']?([^;\s"']+)/i)?.[1] ?? "utf-8";
         let text: string;
-        try { text = new TextDecoder(charset, { fatal: true }).decode(bytes); }
-        catch { throw new GmailContentError("Unsupported or invalid message encoding"); }
+        try {
+          text = new TextDecoder(charset, { fatal: true }).decode(bytes);
+        } catch {
+          throw new GmailContentError(
+            "Unsupported or invalid message encoding",
+          );
+        }
         texts.push(
           part.mimeType === "text/html"
             ? convert(text, {
@@ -150,14 +232,16 @@ export class Gmail {
     return texts;
   }
   async fullContext(thread: Thread, incomingMessageId?: string) {
-    if (!thread.messages?.length) throw new GmailContentError("Complete body unavailable");
+    if (!thread.messages?.length)
+      throw new GmailContentError("Complete body unavailable");
     const messages = [];
     for (const m of [...thread.messages].sort(
       (a, b) => Number(a.internalDate) - Number(b.internalDate),
     )) {
       if (!m.payload) throw new GmailContentError("Complete body unavailable");
       const bodies = await this.textPart(m.id, m.payload);
-      if (!bodies.some((t) => t.trim())) throw new GmailContentError("Complete body unavailable");
+      if (!bodies.some((t) => t.trim()))
+        throw new GmailContentError("Complete body unavailable");
       const item = {
         id: m.id,
         threadId: m.threadId,

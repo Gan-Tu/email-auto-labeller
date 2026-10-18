@@ -12,7 +12,13 @@ import {
 import { Dialog } from "./Dialog";
 import { sortLabels } from "./labels";
 import { ChoiceEditor } from "./ChoiceEditor";
-import { matchingLabel, newChoice, ruleKey, validateRule } from "./rules";
+import {
+  matchingLabel,
+  missingDraftChoiceIds,
+  newChoice,
+  ruleKey,
+  validateRule,
+} from "./rules";
 type Field = "prompt" | "choices" | "threshold" | "enabled";
 export function BatchRuleEditor({
   rules,
@@ -49,10 +55,10 @@ export function BatchRuleEditor({
     [labelReload, setLabelReload] = useState(0);
   const heading = useRef<HTMLHeadingElement>(null);
   const emails = [...new Set(rules.map((r) => r.email))];
-  const incompatibleDrafts =
-    fields.choices &&
-    rules.some((r) => r.draftReplies) &&
-    (choices.length !== 1 || choices[0].id !== "recruiting");
+  const affectedDraftRules = fields.choices
+    ? rules.filter((rule) => missingDraftChoiceIds(rule, choices).length > 0)
+    : [];
+  const incompatibleDrafts = affectedDraftRules.length > 0;
   const promptVariants = new Set(rules.map((r) => r.prompt)).size;
   useEffect(() => {
     if (step > 0) heading.current?.focus();
@@ -139,7 +145,7 @@ export function BatchRuleEditor({
     if (fields.threshold && (threshold < 0.5 || threshold > 0.999))
       return "Choose a threshold between 50 and 99.9%.";
     if (incompatibleDrafts && !disableDrafts)
-      return "Turn off recruiting decline drafts to use these replacement choices.";
+      return "The replacement removes choices used by reply drafts. Turn off reply drafts or keep those choice IDs.";
     if (fields.choices) {
       if (!choices.length || choices.length > 12)
         return "Add between 1 and 12 choices.";
@@ -162,7 +168,7 @@ export function BatchRuleEditor({
           const failure = validateRule({
             ...rule,
             ...(incompatibleDrafts && disableDrafts
-              ? { draftReplies: false }
+              ? { replyDraft: null }
               : {}),
             choices: targetChoices(rule),
           });
@@ -186,7 +192,7 @@ export function BatchRuleEditor({
       ...(fields.prompt ? { prompt: prompt.trim() } : {}),
       ...(fields.threshold ? { threshold } : {}),
       ...(fields.enabled ? { enabled } : {}),
-      ...(incompatibleDrafts && disableDrafts ? { draftReplies: false } : {}),
+      ...(incompatibleDrafts && disableDrafts ? { replyDraft: null } : {}),
     };
     const targets = rules.map((rule) => ({
       email: rule.email,
@@ -350,10 +356,13 @@ export function BatchRuleEditor({
                       onChange={(e) => setDisableDrafts(e.target.checked)}
                     />
                     <span>
-                      Turn off recruiting decline drafts for selected rules.
+                      Turn off reply drafts for all selected rules.
                       <small>
-                        The new choices are not compatible with the existing
-                        recruiting draft action.
+                        The replacement removes draft choices in{" "}
+                        {affectedDraftRules.length}{" "}
+                        {affectedDraftRules.length === 1 ? "rule" : "rules"}.
+                        Confirming disables drafts for every selected rule.
+                        Protected labels stay unchanged.
                       </small>
                     </span>
                   </label>
@@ -483,11 +492,12 @@ export function BatchRuleEditor({
                     </select>
                   </label>
                 ))}
-                {rule.draftReplies && incompatibleDrafts && !disableDrafts ? (
+                {missingDraftChoiceIds(rule, choices).length > 0 &&
+                !disableDrafts ? (
                   <p className="error">
-                    This rule prepares recruiting decline drafts. Disable drafts
-                    in the individual rule before replacing it with multiple
-                    choices.
+                    This replacement removes choices used by the reply draft. Go
+                    back and confirm that reply drafts will be turned off, or
+                    retain those choices.
                   </p>
                 ) : null}
               </section>
@@ -523,7 +533,11 @@ export function BatchRuleEditor({
                       })[key as Field],
                   )
                   .join(", ")}{" "}
-                will be replaced. Other fields are preserved.
+                will be replaced.
+                {incompatibleDrafts && disableDrafts
+                  ? " Reply drafts will be turned off for all selected rules."
+                  : " Existing reply drafts are preserved."}{" "}
+                Protected labels are preserved.
               </p>
             </div>
           </div>
@@ -580,8 +594,8 @@ export function BatchRuleEditor({
                   {(threshold * 100).toFixed(1)}%
                 </p>
               ) : null}
-              {incompatibleDrafts && disableDrafts && rule.draftReplies ? (
-                <p>Recruiting decline drafts: enabled → disabled</p>
+              {incompatibleDrafts && disableDrafts && rule.replyDraft ? (
+                <p>Reply drafts: enabled → disabled</p>
               ) : null}
               {fields.enabled ? (
                 <p>

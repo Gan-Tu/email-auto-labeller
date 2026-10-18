@@ -14,6 +14,7 @@ import {
 import { config, requireEnv } from "../server/config.js";
 import { useGcloudAuth } from "./local-auth.js";
 import { buildRecruitingRule } from "../server/rules.js";
+import { normalizeRuleBehavior } from "../server/rule-behavior.js";
 import { Gmail, findLabel } from "../server/gmail.js";
 import {
   mergeMigrationAccount,
@@ -201,11 +202,17 @@ async function verifyAccount(plan: Plan, beforeProcessing: boolean) {
     (await gmail.profile()).emailAddress,
     plan.source.email,
   );
-  const rule = (await ruleRef(plan.source.email, "recruiting").get()).data() as
-    Rule | undefined;
-  if (!rule || rule.email !== plan.source.email)
+  const storedRule = (
+    await ruleRef(plan.source.email, "recruiting").get()
+  ).data() as Rule | undefined;
+  if (!storedRule || storedRule.email !== plan.source.email)
     throw new Error("Migrated rule is unavailable");
   const labels = await gmail.labels();
+  const rule = normalizeRuleBehavior(
+    storedRule,
+    labels,
+    config.declineReplyText,
+  );
   if (
     rule.choices.some(
       (choice) =>
@@ -215,6 +222,15 @@ async function verifyAccount(plan: Plan, beforeProcessing: boolean) {
     )
   )
     throw new Error("Migrated rule label is unavailable");
+  if (
+    rule.protectedLabels.some(
+      (protection) =>
+        !labels.some(
+          (label) => label.id === protection.labelId && label.type !== "system",
+        ),
+    )
+  )
+    throw new Error("Migrated protected label is unavailable");
   if (beforeProcessing) {
     for (const field of [
       "enabled",
@@ -234,8 +250,8 @@ async function verifyAccount(plan: Plan, beforeProcessing: boolean) {
       "enabled",
       "threshold",
       "scope",
-      "draftReplies",
-      "preserveJobSearch",
+      "protectedLabels",
+      "replyDraft",
       "choices",
     ] as const)
       if (!isDeepStrictEqual(rule[field], plan.rule[field]))
@@ -243,7 +259,7 @@ async function verifyAccount(plan: Plan, beforeProcessing: boolean) {
     const version = (
       await ruleVersionRef(plan.source.email, rule.id, rule.version).get()
     ).data();
-    if (!isDeepStrictEqual(version, rule))
+    if (!isDeepStrictEqual(version, storedRule))
       throw new Error("Immutable rule version differs from current rule");
     for (const collection of plan.records)
       for (let i = 0; i < collection.docs.length; i += 100) {
@@ -325,12 +341,18 @@ try {
     const merged = mergeMigrationAccount(account, destination, sourceIdentity);
     const gmail = new Gmail(merged);
     assertMailboxIdentity((await gmail.profile()).emailAddress, account.email);
-    const label = findLabel(await gmail.labels(), account.label);
+    const fullLabels = await gmail.labels();
+    const label = findLabel(fullLabels, account.label);
     if (!label)
       throw new Error(
         "Existing recruiting label is missing for " + account.email,
       );
-    const rule = buildRecruitingRule(account, label);
+    const rule = buildRecruitingRule(
+      account,
+      label,
+      config.declineReplyText,
+      fullLabels,
+    );
     const records = [];
     for (const name of ["decisions", "draftIntents"]) {
       const snapshot = await document.ref.collection(name).get();
@@ -385,7 +407,8 @@ try {
         labelId: plan.rule.choices[0].labelId,
         enabled: plan.source.enabled,
         threshold: plan.rule.threshold,
-        draftReplies: plan.rule.draftReplies,
+        replyDraftEnabled: !!plan.rule.replyDraft,
+        protectedLabelCount: plan.rule.protectedLabels?.length ?? 0,
         historyId: plan.source.historyId,
         counts: Object.fromEntries(
           plan.records.map((collection) => [

@@ -7,8 +7,15 @@ import {
   rulesRef,
   ruleVersionRef,
   lockRef,
+  listRules,
 } from "./store.js";
 import { Gmail } from "./gmail.js";
+import { config } from "./config.js";
+import {
+  needsLegacyBehavior,
+  normalizeRuleBehavior,
+  RuleBehaviorError,
+} from "./rule-behavior.js";
 import { RECRUITING_PROMPT } from "./classifier.js";
 import type { Account, Label, Rule } from "./types.js";
 export class RuleError extends Error {
@@ -55,6 +62,45 @@ export const choicesSchema = z
     (c) => new Set(c.map((x) => x.labelId)).size === c.length,
     "Each choice needs a different label",
   );
+export const protectedLabelsSchema = z
+  .array(
+    z
+      .object({
+        labelId: text(200),
+        labelName: text(200),
+        includeChildren: z.boolean().default(false),
+      })
+      .strict(),
+  )
+  .max(50)
+  .refine(
+    (labels) =>
+      new Set(labels.map((label) => label.labelId)).size === labels.length,
+    "Protected labels must be unique",
+  );
+export const replyDraftSchema = z
+  .object({
+    choiceIds: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .max(64)
+          .refine(
+            (id) => id !== "no_match",
+            "No match cannot create a reply draft",
+          ),
+      )
+      .min(1)
+      .max(12)
+      .refine(
+        (ids) => new Set(ids).size === ids.length,
+        "Draft choice IDs must be unique",
+      ),
+    body: text(6000),
+  })
+  .strict();
 const ruleFieldsSchema = z
   .object({
     name: text(100),
@@ -63,16 +109,16 @@ const ruleFieldsSchema = z
     enabled: z.boolean(),
     threshold: z.number().min(0.5).max(0.999),
     scope: z.enum(["message", "thread"]),
-    draftReplies: z.boolean(),
-    preserveJobSearch: z.boolean(),
+    protectedLabels: protectedLabelsSchema.optional(),
+    replyDraft: replyDraftSchema.nullable().optional(),
+    draftReplies: z.boolean().optional(),
+    preserveJobSearch: z.boolean().optional(),
   })
   .strict();
 export const editableRuleSchema = ruleFieldsSchema.extend({
   enabled: z.boolean().default(true),
   threshold: z.number().min(0.5).max(0.999).default(0.8),
   scope: z.enum(["message", "thread"]).default("message"),
-  draftReplies: z.boolean().default(false),
-  preserveJobSearch: z.boolean().default(false),
 });
 export const patchRuleSchema = ruleFieldsSchema
   .partial()
@@ -88,6 +134,7 @@ export const batchRuleSchema = z
             ruleId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
             expectedVersion: z.number().int().positive(),
             choices: choicesSchema.optional(),
+            protectedLabels: protectedLabelsSchema.optional(),
           })
           .strict(),
       )
@@ -99,12 +146,18 @@ export const batchRuleSchema = z
           targets.length,
         "Select each rule once",
       ),
-    changes: ruleFieldsSchema.omit({ choices: true }).partial().strict(),
+    changes: ruleFieldsSchema
+      .omit({ choices: true, protectedLabels: true })
+      .partial()
+      .strict(),
   })
   .strict()
   .refine(
     (v) =>
-      Object.keys(v.changes).length > 0 || v.targets.some((t) => t.choices),
+      Object.keys(v.changes).length > 0 ||
+      v.targets.some(
+        (t) => t.choices !== undefined || t.protectedLabels !== undefined,
+      ),
     "Choose a change",
   );
 export function validateRule(rule: Rule, labels: Label[]): Rule {
@@ -115,20 +168,32 @@ export function validateRule(rule: Rule, labels: Label[]): Rule {
     enabled: rule.enabled,
     threshold: rule.threshold,
     scope: rule.scope,
+    protectedLabels: rule.protectedLabels,
+    replyDraft: rule.replyDraft,
     draftReplies: rule.draftReplies,
     preserveJobSearch: rule.preserveJobSearch,
   });
-  if (
-    parsed.draftReplies &&
-    (parsed.choices.length !== 1 || parsed.choices[0].id !== "recruiting")
-  )
-    throw new RuleError("Decline drafts require the single Recruiting choice");
+  let canonical;
+  try {
+    canonical = normalizeRuleBehavior(
+      { ...rule, ...parsed },
+      labels,
+      config.declineReplyText,
+    );
+  } catch (error) {
+    if (error instanceof RuleBehaviorError) throw new RuleError(error.message);
+    throw error;
+  }
+  if (canonical.replyDraft) {
+    const allowed = new Set(parsed.choices.map((choice) => choice.id));
+    if (canonical.replyDraft.choiceIds.some((id) => !allowed.has(id)))
+      throw new RuleError("Reply draft choices must exist in this rule");
+  }
   return {
-    ...rule,
-    ...parsed,
+    ...canonical,
     choices: parsed.choices.map((choice) => {
       const label = labels.find(
-        (l) => l.id === choice.labelId && l.type !== "system",
+        (label) => label.id === choice.labelId && label.type !== "system",
       );
       if (!label)
         throw new RuleError(
@@ -136,35 +201,114 @@ export function validateRule(rule: Rule, labels: Label[]): Rule {
         );
       return { ...choice, labelName: label.name };
     }),
+    protectedLabels: canonical.protectedLabels.map((protection) => {
+      const label = labels.find(
+        (label) => label.id === protection.labelId && label.type !== "system",
+      );
+      if (!label)
+        throw new RuleError(
+          `The protected label ${protection.labelName} is unavailable in this mailbox`,
+        );
+      return { ...protection, labelName: label.name };
+    }),
   };
 }
-export function buildRecruitingRule(account: Account, label: Label): Rule {
+export async function listRulesForAccount(account: Account): Promise<Rule[]> {
+  const rules = await listRules(account.email);
+  let labels: Label[] = [];
+  if (rules.some(needsLegacyBehavior)) {
+    try {
+      labels = await new Gmail(account).labels();
+    } catch {
+      throw new RuleError(
+        "Mailbox labels are temporarily unavailable. Existing rule protections have not been changed; reconnect Gmail or retry.",
+        503,
+      );
+    }
+  }
+  return rules.map((rule) =>
+    normalizeRuleBehavior(rule, labels, config.declineReplyText),
+  );
+}
+export function buildRecruitingRule(
+  account: Account,
+  label: Label,
+  legacyBody = config.declineReplyText,
+  labels: Label[] = [label],
+): Rule {
   const now = Date.now();
-  return {
-    id: "recruiting",
-    email: account.email,
-    name: "Recruiting",
-    prompt: account.classificationPrompt?.trim() || RECRUITING_PROMPT,
-    enabled: account.enabled,
-    threshold: account.threshold,
-    scope: "thread",
-    draftReplies: account.draftReplies,
-    preserveJobSearch:
-      account.label.toLowerCase().replace(/[^a-z0-9]/g, "") === "jobsearch",
-    choices: [
-      {
-        id: "recruiting",
-        name: "Recruiting",
-        description:
-          "Genuine, personally directed outreach or follow-up about recruiting the mailbox owner for an employment opportunity.",
-        labelId: label.id,
-        labelName: label.name,
-      },
-    ],
-    version: 1,
-    createdAt: now,
-    updatedAt: now,
+  return normalizeRuleBehavior(
+    {
+      id: "recruiting",
+      email: account.email,
+      name: "Recruiting",
+      prompt: account.classificationPrompt?.trim() || RECRUITING_PROMPT,
+      enabled: account.enabled,
+      threshold: account.threshold,
+      scope: "thread",
+      draftReplies: account.draftReplies,
+      preserveJobSearch:
+        account.label.toLowerCase().replace(/[^a-z0-9]/g, "") === "jobsearch",
+      choices: [
+        {
+          id: "recruiting",
+          name: "Recruiting",
+          description:
+            "Genuine, personally directed outreach or follow-up about recruiting the mailbox owner for an employment opportunity.",
+          labelId: label.id,
+          labelName: label.name,
+        },
+      ],
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    },
+    labels,
+    legacyBody,
+  );
+}
+/** Translate explicit legacy UI toggles once, without allowing stale flags to revive generic disables. */
+function overlayRuleChanges(
+  before: Rule,
+  changes: z.infer<typeof batchRuleSchema>["changes"],
+  target: z.infer<typeof batchRuleSchema>["targets"][number],
+  labels: Label[],
+): Rule {
+  const normalized = normalizeRuleBehavior(
+    before,
+    labels,
+    config.declineReplyText,
+  );
+  const next: Rule = {
+    ...normalized,
+    ...changes,
+    ...(target.choices !== undefined ? { choices: target.choices } : {}),
+    ...(target.protectedLabels !== undefined
+      ? { protectedLabels: target.protectedLabels }
+      : {}),
   };
+  if (changes.replyDraft === undefined && changes.draftReplies !== undefined) {
+    next.replyDraft = changes.draftReplies
+      ? normalizeRuleBehavior(
+          { ...next, replyDraft: undefined, draftReplies: true },
+          labels,
+          config.declineReplyText,
+        ).replyDraft
+      : null;
+  }
+  if (
+    target.protectedLabels === undefined &&
+    changes.preserveJobSearch !== undefined
+  ) {
+    next.protectedLabels = changes.preserveJobSearch
+      ? normalizeRuleBehavior(
+          { ...next, protectedLabels: undefined, preserveJobSearch: true },
+          labels,
+          config.declineReplyText,
+        ).protectedLabels
+      : [];
+  }
+  return next;
 }
 export async function createRule(
   actor: string,
@@ -268,9 +412,12 @@ export async function updateRules(
         );
       return validateRule(
         {
-          ...before,
-          ...batch.changes,
-          ...(target.choices ? { choices: target.choices } : {}),
+          ...overlayRuleChanges(
+            before,
+            batch.changes,
+            target,
+            labelMap.get(target.email)!,
+          ),
           version: before.version + 1,
           updatedAt: Date.now(),
           lastError: null,

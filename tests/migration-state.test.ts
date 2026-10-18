@@ -78,3 +78,45 @@ describe("Cutover state merge", () => {
     ).not.toThrow();
   });
 });
+
+it("keeps the OAuth issuer marker paired with the selected staged refresh token", () => {
+  const source = {
+    ...account,
+    clientType: "web" as const,
+    oauthClientId: "old-web-client",
+  };
+  const destination = {
+    ...account,
+    clientType: "web" as const,
+    oauthClientId: "new-web-client",
+    refreshToken: "encrypted-new-token",
+  };
+  expect(
+    mergeMigrationAccount(source, destination, sourceIdentity),
+  ).toMatchObject({
+    refreshToken: "encrypted-new-token",
+    clientType: "web",
+    oauthClientId: "new-web-client",
+  });
+  expect(
+    mergeMigrationAccount(source, undefined, sourceIdentity),
+  ).toMatchObject({
+    refreshToken: source.refreshToken,
+    oauthClientId: "old-web-client",
+  });
+});
+it("does not inherit a source issuer marker when the chosen destination token is unmarked", () => {
+  const source = {
+    ...account,
+    clientType: "web" as const,
+    oauthClientId: "new-web-client",
+  };
+  const destination = {
+    ...account,
+    clientType: "web" as const,
+    refreshToken: "encrypted-unmarked-previous-token",
+  };
+  const merged = mergeMigrationAccount(source, destination, sourceIdentity);
+  expect(merged.refreshToken).toBe(destination.refreshToken);
+  expect(merged).not.toHaveProperty("oauthClientId");
+});

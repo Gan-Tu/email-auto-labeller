@@ -8,6 +8,11 @@ import { db, accountRef, getAccount, withAccountLock } from "./store.js";
 import { Gmail } from "./gmail.js";
 import type { Account } from "./types.js";
 import { requestOrigin } from "./origins.js";
+import {
+  hasOAuthDisclosureConsent,
+  clearOAuthDisclosure,
+  DATA_CONSENT_VERSION,
+} from "./oauth-disclosure.js";
 const random = () => randomBytes(32).toString("base64url");
 const secure = () => config.baseUrl.startsWith("https:");
 const cookie = (maxAge: number) => ({
@@ -81,6 +86,15 @@ export const csrf = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 export async function startOAuth(req: Request, res: Response) {
+  if (!hasOAuthDisclosureConsent(req)) {
+    res
+      .status(400)
+      .send(
+        "Review the Gmail data disclosure and confirm before continuing. Return to /auth/google to try again.",
+      );
+    return;
+  }
+  clearOAuthDisclosure(res);
   const origin = requestOrigin(req);
   if (!origin) {
     res.status(400).json({ error: "Unsupported app URL" });
@@ -100,6 +114,8 @@ export async function startOAuth(req: Request, res: Response) {
       nonce,
       redirectUri,
       owner: req.session?.email ?? null,
+      dataConsentVersion: DATA_CONSENT_VERSION,
+      dataConsentAt: Date.now(),
       expiresAt: Date.now() + 600000,
       ttl: Timestamp.fromMillis(Date.now() + 600000),
     });
@@ -179,8 +195,13 @@ export async function finishOAuth(req: Request, res: Response) {
     await withAccountLock(email, async () => {
       const previous = await getAccount(email);
       const refresh = tokens.refresh_token;
-      if (!refresh && (!previous || previous.clientType !== "web"))
-        throw new Error("refresh");
+      const currentClientId = requireEnv("GOOGLE_CLIENT_ID");
+      const previousUsesCurrentClient =
+        previous?.clientType === "web" &&
+        (previous.oauthClientId === currentClientId ||
+          (!previous.oauthClientId &&
+            !process.env.PREVIOUS_WEB_GOOGLE_CLIENT_ID));
+      if (!refresh && !previousUsesCurrentClient) throw new Error("refresh");
       const account: Account = {
         ...previous,
         email,
@@ -189,6 +210,13 @@ export async function finishOAuth(req: Request, res: Response) {
           ? encrypt(refresh, email)
           : previous!.refreshToken,
         clientType: "web",
+        oauthClientId: currentClientId,
+        ...(transaction.dataConsentVersion
+          ? {
+              dataConsentVersion: transaction.dataConsentVersion,
+              dataConsentAt: transaction.dataConsentAt,
+            }
+          : {}),
         label: previous?.label ?? defaultLabel(),
         enabled: previous?.enabled ?? true,
         draftReplies: previous?.draftReplies ?? false,
@@ -239,9 +267,10 @@ export async function logout(req: Request, res: Response) {
     await db.collection("sessions").doc(hash(req.cookies.session)).delete();
   res.clearCookie("session", { path: "/" }).json({ ok: true });
 }
-export async function verifyService(req: Request, email: string) {
+export async function verifyService(req: Request, email: string | string[]) {
+  const allowed = typeof email === "string" ? [email] : email;
   const bearer = req.get("authorization");
-  if (!bearer?.startsWith("Bearer ") || !email) return false;
+  if (!bearer?.startsWith("Bearer ") || !allowed.length) return false;
   try {
     const p = (
       await new OAuth2Client().verifyIdToken({
@@ -249,7 +278,7 @@ export async function verifyService(req: Request, email: string) {
         audience: config.appOrigins,
       })
     ).getPayload();
-    return p?.email === email && p.email_verified === true;
+    return !!p?.email && allowed.includes(p.email) && p.email_verified === true;
   } catch {
     return false;
   }

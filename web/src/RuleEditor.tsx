@@ -5,6 +5,7 @@ import {
   Check,
   AlertCircle,
   Trash2,
+  Plus,
 } from "lucide-react";
 import {
   api,
@@ -15,12 +16,18 @@ import {
   type GmailLabel,
   type Rule,
   type RuleInput,
+  type ReplyDraft,
   type TestResponse,
   type User,
 } from "./api";
 import { Dialog } from "./Dialog";
 import { ChoiceEditor } from "./ChoiceEditor";
-import { cleanRule, newChoice, validateRule } from "./rules";
+import {
+  cleanRule,
+  missingDraftChoiceIds,
+  newChoice,
+  validateRule,
+} from "./rules";
 import { sortLabels } from "./labels";
 const recruitingDescription =
   "Genuine, personally directed outreach or follow-up about recruiting the mailbox owner for an employment opportunity.";
@@ -50,6 +57,8 @@ export function RuleEditor({
           threshold: 0.8,
           scope: "message",
           choices: [newChoice()],
+          protectedLabels: [],
+          replyDraft: null,
         },
   );
   const [labels, setLabels] = useState<GmailLabel[]>([]),
@@ -65,6 +74,11 @@ export function RuleEditor({
     [testResult, setTestResult] = useState<TestResponse>(),
     [testError, setTestError] = useState("");
   const testRevision = useRef(0);
+  const draftCache = useRef<ReplyDraft>(
+    form.replyDraft ?? { choiceIds: [], body: "" },
+  );
+  const protectedLabels = form.protectedLabels ?? [];
+  const missingDraftChoices = missingDraftChoiceIds(form);
   useEffect(() => {
     const controller = new AbortController();
     setLabelsLoading(true);
@@ -84,14 +98,8 @@ export function RuleEditor({
   }, [email, labelReload]);
   const change = (patch: Partial<RuleInput>) => {
     testRevision.current += 1;
-    setForm((f) => ({
-      ...f,
-      ...patch,
-      ...(patch.choices &&
-      (patch.choices.length !== 1 || patch.choices[0].id !== "recruiting")
-        ? { draftReplies: false }
-        : {}),
-    }));
+    if (patch.replyDraft) draftCache.current = patch.replyDraft;
+    setForm((f) => ({ ...f, ...patch }));
     setTestResult(undefined);
   };
   function validation() {
@@ -99,6 +107,11 @@ export function RuleEditor({
       validateRule(form) ||
       (form.choices.some((c) => !labels.some((l) => l.id === c.labelId))
         ? "Select an available Gmail label for every choice."
+        : "") ||
+      (protectedLabels.some(
+        (label) => !labels.some((existing) => existing.id === label.labelId),
+      )
+        ? "Remap or remove unavailable protected Gmail labels."
         : "")
     );
   }
@@ -223,6 +236,11 @@ export function RuleEditor({
                   onChange={(e) => {
                     setEmail(e.target.value);
                     change({
+                      protectedLabels: protectedLabels.map((label) => ({
+                        ...label,
+                        labelId: "",
+                        labelName: "",
+                      })),
                       choices: form.choices.map((c) => ({
                         ...c,
                         labelId: "",
@@ -304,17 +322,8 @@ export function RuleEditor({
               labelsLoading={labelsLoading}
               disabled={busy}
             />
-            {rule?.draftReplies &&
-            !form.draftReplies &&
-            (form.choices.length !== 1 ||
-              form.choices[0]?.id !== "recruiting") ? (
-              <p className="hint">
-                Recruiting decline drafts will be turned off when you save these
-                choices.
-              </p>
-            ) : null}
             <div className="rule-behavior">
-              <h3>Behavior</h3>
+              <h3>Rule behavior</h3>
               <div className="field-grid">
                 <label className="field">
                   Minimum match probability
@@ -365,49 +374,253 @@ export function RuleEditor({
                   <small>Runs on new emails when the mailbox is active.</small>
                 </span>
               </label>
-              {rule?.preserveJobSearch ||
-              rule?.draftReplies ||
-              form.choices.some((c) => c.id === "recruiting") ? (
-                <details className="advanced-settings">
-                  <summary>Recruiting behavior</summary>
-                  <label className="check-field">
-                    <input
-                      type="checkbox"
-                      checked={!!form.preserveJobSearch}
-                      onChange={(e) =>
-                        change({ preserveJobSearch: e.target.checked })
-                      }
-                    />
-                    <span>
-                      Preserve existing Job Search labels
+              <section
+                className="behavior-section"
+                aria-labelledby="protected-labels-title"
+              >
+                <h4 id="protected-labels-title">
+                  Skip conversations with these labels
+                </h4>
+                <p className="hint">
+                  Skip the entire conversation if any selected label is already
+                  present. Include nested labels to protect its sublabels too.
+                </p>
+                {protectedLabels.map((protection, index) => (
+                  <div className="protected-label-row" key={index}>
+                    <div className="protected-label-heading">
+                      <label className="field">
+                        Protected Gmail label
+                        <select
+                          required
+                          value={protection.labelId}
+                          disabled={busy || labelsLoading}
+                          onChange={(event) =>
+                            change({
+                              protectedLabels: protectedLabels.map(
+                                (item, itemIndex) =>
+                                  itemIndex === index
+                                    ? {
+                                        ...item,
+                                        labelId: event.target.value,
+                                        labelName:
+                                          labels.find(
+                                            (label) =>
+                                              label.id === event.target.value,
+                                          )?.name ?? "",
+                                      }
+                                    : item,
+                              ),
+                            })
+                          }
+                        >
+                          <option value="">
+                            {labelsLoading
+                              ? "Loading labels…"
+                              : "Select an existing label"}
+                          </option>
+                          {protection.labelId &&
+                          !labels.some(
+                            (label) => label.id === protection.labelId,
+                          ) ? (
+                            <option value={protection.labelId} disabled>
+                              {protection.labelName || "Protected label"}{" "}
+                              (unavailable)
+                            </option>
+                          ) : null}
+                          {labels.map((label) => (
+                            <option
+                              key={label.id}
+                              value={label.id}
+                              disabled={protectedLabels.some(
+                                (item, itemIndex) =>
+                                  itemIndex !== index &&
+                                  item.labelId === label.id,
+                              )}
+                            >
+                              {label.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="icon-button danger"
+                        disabled={busy}
+                        aria-label={`Remove protected label ${protection.labelName || index + 1}`}
+                        onClick={() =>
+                          change({
+                            protectedLabels: protectedLabels.filter(
+                              (_, itemIndex) => itemIndex !== index,
+                            ),
+                          })
+                        }
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                    <label className="check-field">
+                      <input
+                        type="checkbox"
+                        checked={protection.includeChildren}
+                        disabled={busy}
+                        onChange={(event) =>
+                          change({
+                            protectedLabels: protectedLabels.map(
+                              (item, itemIndex) =>
+                                itemIndex === index
+                                  ? {
+                                      ...item,
+                                      includeChildren: event.target.checked,
+                                    }
+                                  : item,
+                            ),
+                          })
+                        }
+                      />
+                      <span>Include nested labels</span>
+                    </label>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={
+                    busy ||
+                    labelsLoading ||
+                    !!labelError ||
+                    protectedLabels.length >= 50
+                  }
+                  onClick={() =>
+                    change({
+                      protectedLabels: [
+                        ...protectedLabels,
+                        { labelId: "", labelName: "", includeChildren: false },
+                      ],
+                    })
+                  }
+                >
+                  <Plus size={15} /> Add protected label
+                </button>
+              </section>
+              <section
+                className="behavior-section"
+                aria-labelledby="reply-draft-title"
+              >
+                <h4 id="reply-draft-title">Reply draft</h4>
+                <label className="check-field">
+                  <input
+                    type="checkbox"
+                    checked={!!form.replyDraft}
+                    disabled={busy}
+                    onChange={(event) =>
+                      change({
+                        replyDraft: event.target.checked
+                          ? draftCache.current
+                          : null,
+                      })
+                    }
+                  />
+                  <span>
+                    <strong>Prepare a reply draft</strong>
+                    <small>
+                      Only for selected matches at or above this rule’s
+                      probability threshold. Drafts are never sent.
+                    </small>
+                  </span>
+                </label>
+                {form.replyDraft ? (
+                  <>
+                    <fieldset className="draft-choice-options">
+                      <legend>Prepare a draft for these choices</legend>
+                      {form.choices.map((choice, index) => (
+                        <label className="check-field" key={choice.id}>
+                          <input
+                            type="checkbox"
+                            checked={form.replyDraft!.choiceIds.includes(
+                              choice.id,
+                            )}
+                            disabled={busy}
+                            onChange={(event) =>
+                              change({
+                                replyDraft: {
+                                  ...form.replyDraft!,
+                                  choiceIds: event.target.checked
+                                    ? [...form.replyDraft!.choiceIds, choice.id]
+                                    : form.replyDraft!.choiceIds.filter(
+                                        (id) => id !== choice.id,
+                                      ),
+                                },
+                              })
+                            }
+                          />
+                          <span>{choice.name || `Choice ${index + 1}`}</span>
+                        </label>
+                      ))}
+                    </fieldset>
+                    {missingDraftChoices.length ? (
+                      <div className="error draft-choice-warning" role="alert">
+                        <p>
+                          A selected draft choice was removed. Update the
+                          choices below or turn off reply drafts before saving.
+                        </p>
+                        {missingDraftChoices.map((id, index) => (
+                          <div key={id}>
+                            <span>
+                              {rule?.choices.find((choice) => choice.id === id)
+                                ?.name ?? `Removed choice ${index + 1}`}
+                            </span>
+                            <button
+                              type="button"
+                              className="text-button"
+                              disabled={busy}
+                              onClick={() =>
+                                change({
+                                  replyDraft: {
+                                    ...form.replyDraft!,
+                                    choiceIds:
+                                      form.replyDraft!.choiceIds.filter(
+                                        (choiceId) => choiceId !== id,
+                                      ),
+                                  },
+                                })
+                              }
+                            >
+                              Remove from draft
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <label className="field">
+                      Reply text
+                      <textarea
+                        required
+                        maxLength={6000}
+                        rows={6}
+                        value={form.replyDraft.body}
+                        disabled={busy}
+                        placeholder="Write the plain-text reply to prepare for these choices."
+                        onChange={(event) =>
+                          change({
+                            replyDraft: {
+                              ...form.replyDraft!,
+                              body: event.target.value,
+                            },
+                          })
+                        }
+                      />
                       <small>
-                        Skip conversations already filed in the Job Search label
-                        group.
+                        {form.replyDraft.body.length.toLocaleString()} / 6,000
+                        characters · plain text
                       </small>
-                    </span>
-                  </label>
-                  <label className="check-field">
-                    <input
-                      type="checkbox"
-                      checked={!!form.draftReplies}
-                      disabled={
-                        form.choices.length !== 1 ||
-                        form.choices[0].id !== "recruiting"
-                      }
-                      onChange={(e) =>
-                        change({ draftReplies: e.target.checked })
-                      }
-                    />
-                    <span>
-                      Prepare a polite decline draft
-                      <small>
-                        Available for a single recruiting choice. Drafts are
-                        never sent.
-                      </small>
-                    </span>
-                  </label>
-                </details>
-              ) : null}
+                    </label>
+                    <p className="hint">
+                      Replied conversations, existing drafts, and automated
+                      messages are skipped.
+                    </p>
+                  </>
+                ) : null}
+              </section>
             </div>
           </div>
           <aside className="test-panel">
@@ -416,7 +629,8 @@ export function RuleEditor({
               <h3>Test this rule</h3>
             </div>
             <p className="hint">
-              Uses your unsaved changes. No labels will be applied.
+              Uses your unsaved changes. No labels will be applied and no drafts
+              created.
             </p>
             <div className="segmented" aria-label="Test input type">
               <button

@@ -386,7 +386,10 @@ it("cancels queued work for a paused or deleted rule without classification", as
   );
 });
 it("does not draft for a preexisting manually applied label", async () => {
-  state.rules[0].draftReplies = true;
+  state.rules[0].replyDraft = {
+    choiceIds: ["yes"],
+    body: "Thank you for your message.",
+  };
   state.applied.set("m", ["L1"]);
   await processJob(new Gmail(state.account as any), job());
   expect(state.label).not.toHaveBeenCalled();
@@ -411,8 +414,11 @@ it.each([
   },
 );
 
-it("does not draft a decline to a newer unclassified reply", async () => {
-  state.rules[0].draftReplies = true;
+it("does not draft a reply to a newer unclassified reply", async () => {
+  state.rules[0].replyDraft = {
+    choiceIds: ["yes"],
+    body: "Thank you for your message.",
+  };
   const thread = () => ({
     id: "t",
     messages: [
@@ -448,7 +454,10 @@ it("does not draft a decline to a newer unclassified reply", async () => {
 it.each([false, true])(
   "reserves a draft once across thread messages, including ambiguous delivery: %s",
   async (ambiguous) => {
-    state.rules[0].draftReplies = true;
+    state.rules[0].replyDraft = {
+      choiceIds: ["yes"],
+      body: "Thank you for your message.",
+    };
     let arrived = false;
     const makeMessage = (id: string, date: string) => ({
       id,
@@ -503,3 +512,141 @@ it.each([false, true])(
     expect(state.decisions.get("next:work:1")?.draft).toBe("skipped");
   },
 );
+
+describe("generic rule behaviors", () => {
+  const messageWithLabel = (labelId: string) => ({
+    id: "t",
+    messages: [
+      { id: "m", threadId: "t", internalDate: "1", labelIds: [labelId] },
+    ],
+  });
+  const labels = [
+    { id: "parent", name: "Invoices" },
+    { id: "child", name: "Invoices/2026" },
+    { id: "other", name: "Invoices Other" },
+  ];
+  it("protects chosen labels and optional slash descendants, not similar prefixes", () => {
+    const rule = {
+      ...makeRule(),
+      protectedLabels: [
+        { labelId: "parent", labelName: "Old name", includeChildren: true },
+      ],
+    };
+    expect(ruleProtectsThread(rule, messageWithLabel("parent"), labels)).toBe(
+      true,
+    );
+    expect(ruleProtectsThread(rule, messageWithLabel("child"), labels)).toBe(
+      true,
+    );
+    expect(ruleProtectsThread(rule, messageWithLabel("other"), labels)).toBe(
+      false,
+    );
+    rule.protectedLabels[0].includeChildren = false;
+    expect(ruleProtectsThread(rule, messageWithLabel("child"), labels)).toBe(
+      false,
+    );
+  });
+  it("explicit empty protections override migrated Job Search behavior", () => {
+    expect(
+      ruleProtectsThread(
+        { ...makeRule(), preserveJobSearch: true, protectedLabels: [] },
+        messageWithLabel("job"),
+        [{ id: "job", name: "Job Search" }],
+      ),
+    ).toBe(false);
+  });
+  const prepareDraft = () => {
+    state.rules[0].replyDraft = {
+      choiceIds: ["yes"],
+      body: "Invoice received.\nThank you!",
+    };
+    state.thread.mockImplementation(async () => ({
+      id: "t",
+      messages: [
+        {
+          id: "m",
+          threadId: "t",
+          internalDate: "2",
+          labelIds: state.applied.get("m") ?? [],
+          payload: {
+            headers: [
+              { name: "from", value: "vendor@example.com" },
+              { name: "message-id", value: "<invoice@example.com>" },
+            ],
+          },
+        },
+      ],
+    }));
+    state.request.mockImplementation(async (path: string) =>
+      path.startsWith("messages/")
+        ? { id: "m", threadId: "t", internalDate: "2" }
+        : path.startsWith("drafts?")
+          ? { drafts: [] }
+          : { id: "draft1" },
+    );
+  };
+  it("creates an arbitrary-choice reply using that rule's template", async () => {
+    prepareDraft();
+    await processJob(new Gmail(state.account as any), job());
+    const write = state.request.mock.calls.find(
+      (call) => call[0] === "drafts" && call[1] === "POST",
+    );
+    expect(write).toBeDefined();
+    const raw = Buffer.from(
+      (write as any)[2].message.raw,
+      "base64url",
+    ).toString();
+    expect(Buffer.from(raw.split("\r\n\r\n")[1], "base64").toString()).toBe(
+      "Invoice received.\nThank you!",
+    );
+    expect(state.decisions.get("m:work:1")?.draft).toBe("created");
+  });
+  it("does not draft when a different output is selected", async () => {
+    prepareDraft();
+    state.rules[0].choices.push({
+      ...state.rules[0].choices[0],
+      id: "other",
+      labelId: "L2",
+      name: "Other",
+    });
+    state.rules[0].replyDraft!.choiceIds = ["other"];
+    await processJob(new Gmail(state.account as any), job());
+    expect(state.label).toHaveBeenCalledWith(["m"], "L1");
+    expect(
+      state.request.mock.calls.some((call) =>
+        String(call[0]).startsWith("drafts"),
+      ),
+    ).toBe(false);
+  });
+  it.each([
+    ["from", "no-reply@example.com"],
+    ["auto-submitted", "auto-generated"],
+    ["precedence", "bulk"],
+  ])("skips automated replies identified by %s", async (name, value) => {
+    prepareDraft();
+    const thread = await state.thread();
+    thread.messages[0].payload.headers =
+      thread.messages[0].payload.headers.filter((h: any) => h.name !== name);
+    thread.messages[0].payload.headers.push({ name, value });
+    state.thread.mockResolvedValue(thread);
+    await processJob(new Gmail(state.account as any), job());
+    expect(
+      state.request.mock.calls.some((call) =>
+        String(call[0]).startsWith("drafts"),
+      ),
+    ).toBe(false);
+  });
+});
+
+it("does not classify or act when a protected label was deleted", async () => {
+  state.rules[0].protectedLabels = [
+    { labelId: "deleted", labelName: "Invoices", includeChildren: true },
+  ];
+  await processJob(new Gmail(state.account as any), job());
+  expect(state.classify).not.toHaveBeenCalled();
+  expect(state.label).not.toHaveBeenCalled();
+  expect(state.decisions.get("m:work:1")).toMatchObject({
+    outcome: "failed",
+    reason: expect.stringContaining("Protected label unavailable"),
+  });
+});

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { cleanRule, matchingLabel, validateRule } from "../web/src/rules";
+import {
+  cleanRule,
+  matchingLabel,
+  missingDraftChoiceIds,
+  validateRule,
+} from "../web/src/rules";
 import { filteredHistory, mergeHistory } from "../web/src/history";
 import type { Decision, Rule } from "../web/src/api";
 const rule = (email = "first@example.com"): Rule => ({
@@ -94,13 +99,109 @@ describe("rule editor safeguards", () => {
     current.choices[1].name = "No match";
     expect(validateRule(current)).toContain("No match is already included");
   });
-  it("requires the specific legacy recruiting choice for decline drafts", () => {
-    const current = { ...rule(), draftReplies: true };
-    expect(validateRule(current)).toBe("");
+  it("allows reply drafts for any chosen subset of multiple non-recruiting choices", () => {
+    const current = rule();
     current.choices = [
       { ...current.choices[0], id: "consulting", name: "Consulting" },
+      {
+        ...current.choices[0],
+        id: "speaking",
+        name: "Speaking",
+        labelId: "Label_2",
+        labelName: "Speaking",
+      },
     ];
-    expect(validateRule(current)).toContain("Decline drafts require");
+    current.replyDraft = {
+      choiceIds: ["consulting", "speaking"],
+      body: "Thanks for the invitation. Could you share the details?",
+    };
+    expect(validateRule(current)).toBe("");
+    current.replyDraft.choiceIds = ["speaking"];
+    expect(validateRule(current)).toBe("");
+  });
+  it("blocks removed draft choices without silently selecting their replacements", () => {
+    const current = rule();
+    current.replyDraft = {
+      choiceIds: ["recruiting"],
+      body: "Thanks for reaching out.",
+    };
+    const replacement = [
+      { ...current.choices[0], id: "consulting", name: "Consulting" },
+    ];
+    expect(missingDraftChoiceIds(current, replacement)).toEqual(["recruiting"]);
+    expect(current.replyDraft.choiceIds).toEqual(["recruiting"]);
+    expect(validateRule({ ...current, choices: replacement })).toContain(
+      "removed choice",
+    );
+    expect(
+      validateRule({ ...current, choices: replacement, replyDraft: null }),
+    ).toBe("");
+    expect(
+      validateRule({
+        ...current,
+        replyDraft: { ...current.replyDraft, choiceIds: ["no_match"] },
+      }),
+    ).toContain("removed choice");
+  });
+  it("requires explicit draft choices and a nonblank body within the limit", () => {
+    const current = rule();
+    current.replyDraft = { choiceIds: [], body: "Thanks for reaching out." };
+    expect(validateRule(current)).toContain("Select at least one choice");
+    current.replyDraft = { choiceIds: ["recruiting"], body: "   " };
+    expect(validateRule(current)).toContain("1 and 6,000");
+    current.replyDraft.body = "x".repeat(6001);
+    expect(validateRule(current)).toContain("1 and 6,000");
+    current.replyDraft.body = "x".repeat(6000);
+    expect(validateRule(current)).toBe("");
+  });
+  it("preserves independent protection and draft settings in normalized payloads", () => {
+    const current = {
+      ...rule(),
+      protectedLabels: [
+        {
+          labelId: "protected-archive",
+          labelName: "Archive",
+          includeChildren: true,
+        },
+      ],
+      replyDraft: {
+        choiceIds: ["recruiting"],
+        body: "  Thanks for reaching out.  ",
+      },
+      draftReplies: true,
+      preserveJobSearch: true,
+    };
+    const cleaned = cleanRule(current);
+    expect(cleaned.protectedLabels).toEqual(current.protectedLabels);
+    expect(cleaned.replyDraft).toEqual({
+      choiceIds: ["recruiting"],
+      body: "Thanks for reaching out.",
+    });
+    expect(cleaned.protectedLabels).not.toBe(current.protectedLabels);
+    expect(cleaned.replyDraft?.choiceIds).not.toBe(
+      current.replyDraft.choiceIds,
+    );
+    expect(cleaned).not.toHaveProperty("draftReplies");
+    expect(cleaned).not.toHaveProperty("preserveJobSearch");
+    expect(cleanRule(rule())).toMatchObject({
+      protectedLabels: [],
+      replyDraft: null,
+    });
+    expect(
+      cleanRule({ ...current, protectedLabels: [], replyDraft: null }),
+    ).toMatchObject({ protectedLabels: [], replyDraft: null });
+  });
+  it("rejects incomplete or repeated protected labels", () => {
+    const current = rule();
+    current.protectedLabels = [
+      { labelId: "", labelName: "", includeChildren: false },
+    ];
+    expect(validateRule(current)).toContain("every protected label row");
+    current.protectedLabels = [
+      { labelId: "archive", labelName: "Archive", includeChildren: false },
+      { labelId: "archive", labelName: "Archive", includeChildren: true },
+    ];
+    expect(validateRule(current)).toContain("only once");
   });
   it("preserves each mailbox mapping when batch wording uses a common source", () => {
     const source = rule();

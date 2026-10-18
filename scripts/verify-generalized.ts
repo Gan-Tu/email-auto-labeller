@@ -162,6 +162,8 @@ function assertOwnedRule(rule: Rule, expected: TemporaryRule) {
     rule.name !== expected.name ||
     !rule.prompt.includes(state.marker) ||
     rule.draftReplies ||
+    rule.replyDraft ||
+    rule.protectedLabels?.length ||
     rule.scope !== "message" ||
     (expected.id && rule.id !== expected.id) ||
     (expected.version && rule.version !== expected.version)
@@ -281,8 +283,8 @@ async function create() {
         enabled: true,
         scope: "message",
         threshold: 0.8,
-        draftReplies: false,
-        preserveJobSearch: false,
+        protectedLabels: [],
+        replyDraft: null,
         prompt:
           prefix +
           (category
@@ -321,9 +323,15 @@ async function create() {
       expected.id = rule.id;
       expected.version = rule.version;
       await saveState();
+      assertOwnedRule(rule, expected);
     }
     // Both rules exist before inserting any marked messages; hold the lease during insertion.
     await withAccountLock(EMAIL, async () => {
+      // Re-read under the lease so changed draft settings cannot precede insertion.
+      if ((await recoverRules()).length !== 2)
+        throw new Error(
+          "Both draft-free verification rules must exist before inserting fixtures",
+        );
       for (const fixture of fixtures) {
         const test: Case = {
           name: fixture.name,

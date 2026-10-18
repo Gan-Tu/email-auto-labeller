@@ -39,13 +39,46 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   };
   const baseUrl = origin(setting("BASE_URL", "http://localhost:8080"));
   const topic = setting("GMAIL_TOPIC", "");
-  if (topic && !/^projects\/[^/]+\/topics\/[^/]+$/.test(topic))
-    throw new Error(
-      "GMAIL_TOPIC must be a full projects/PROJECT/topics/TOPIC resource name",
-    );
-  const pushEmail = setting("PUSH_SERVICE_ACCOUNT", "");
+  const previousWebTopic = env.PREVIOUS_WEB_GMAIL_TOPIC?.trim() || "";
+  const configuredLegacyTopic = env.LEGACY_GMAIL_TOPIC?.trim() || "";
+  for (const [name, value] of [
+    ["GMAIL_TOPIC", topic],
+    ["PREVIOUS_WEB_GMAIL_TOPIC", previousWebTopic],
+    ["LEGACY_GMAIL_TOPIC", configuredLegacyTopic],
+  ]) {
+    if (value && !/^projects\/[^/]+\/topics\/[^/]+$/.test(value))
+      throw new Error(
+        `${name} must be a full projects/PROJECT/topics/TOPIC resource name`,
+      );
+  }
+  if (production) {
+    for (const prefix of ["PREVIOUS_WEB_GOOGLE", "LEGACY_GOOGLE"]) {
+      const id = env[`${prefix}_CLIENT_ID`]?.trim(),
+        secret = env[`${prefix}_CLIENT_SECRET`]?.trim();
+      if (!!id !== !!secret)
+        throw new Error(
+          `${prefix}_CLIENT_ID and ${prefix}_CLIENT_SECRET must be configured together`,
+        );
+    }
+    if (env.PREVIOUS_WEB_GOOGLE_CLIENT_ID?.trim() && !previousWebTopic)
+      throw new Error(
+        "PREVIOUS_WEB_GMAIL_TOPIC is required when previous web OAuth credentials are configured",
+      );
+  }
+  const legacyTopic = configuredLegacyTopic || previousWebTopic || topic;
+  const pushEmail = setting("PUSH_SERVICE_ACCOUNT", "").toLowerCase();
+  const pushEmails = [
+    ...new Set(
+      [
+        pushEmail,
+        ...(env.ADDITIONAL_PUSH_SERVICE_ACCOUNTS ?? "")
+          .split(",")
+          .map((email) => email.trim().toLowerCase()),
+      ].filter(Boolean),
+    ),
+  ];
   const schedulerEmail = setting("SCHEDULER_SERVICE_ACCOUNT", "");
-  for (const email of [pushEmail, schedulerEmail])
+  for (const email of [...pushEmails, schedulerEmail])
     if (email && !emailPattern.test(email))
       throw new Error("Service account identities must be email addresses");
   const port = Number(env.PORT ?? 8080);
@@ -62,7 +95,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       ]),
     ],
     topic,
+    previousWebTopic,
+    legacyTopic,
     pushEmail,
+    pushEmails,
     schedulerEmail,
     owner,
     allowed,

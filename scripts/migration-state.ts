@@ -17,8 +17,12 @@ export function mergeMigrationAccount(
     !["legacy", "web"].includes(credentials.clientType)
   )
     throw new Error("Migration credential unavailable");
+  const { oauthClientId: _sourceClientId, ...sourceMetadata } = source;
   return {
-    ...source,
+    ...sourceMetadata,
+    ...(credentials.oauthClientId === undefined
+      ? {}
+      : { oauthClientId: credentials.oauthClientId }),
     refreshToken: credentials.refreshToken,
     clientType: credentials.clientType,
     rulesMigratedAt: now,

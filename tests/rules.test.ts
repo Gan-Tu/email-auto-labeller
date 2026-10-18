@@ -3,6 +3,8 @@ const state = vi.hoisted(() => ({
   docs: new Map<string, any>(),
   failCommit: false,
   labels: new Map<string, any[]>(),
+  labelCalls: [] as string[],
+  failLabels: false,
 }));
 const ref = (path: string) => ({ path });
 vi.mock("../server/store", () => {
@@ -14,6 +16,13 @@ vi.mock("../server/store", () => {
       data: () => structuredClone(state.docs.get(ref.path)),
     }));
   return {
+    listRules: async (email: string) =>
+      [...state.docs]
+        .filter(
+          ([key, value]) =>
+            key.startsWith(`accounts/${email}/rules/`) && !value.deletedAt,
+        )
+        .map(([, value]) => structuredClone(value)),
     lockRef: (e: string) => ref(`locks/${e}`),
     accountRef: (e: string) => ref(`accounts/${e}`),
     ruleRef: (e: string, id: string) => ref(`accounts/${e}/rules/${id}`),
@@ -51,7 +60,11 @@ vi.mock("../server/store", () => {
 vi.mock("../server/gmail", () => ({
   Gmail: class {
     constructor(public account: any) {}
-    labels = async () => state.labels.get(this.account.email) ?? [];
+    labels = async () => {
+      state.labelCalls.push(this.account.email);
+      if (state.failLabels) throw new Error("Gmail unavailable");
+      return state.labels.get(this.account.email) ?? [];
+    };
   },
 }));
 import {
@@ -61,6 +74,7 @@ import {
   editableRuleSchema,
   validateRule,
   buildRecruitingRule,
+  listRulesForAccount,
 } from "../server/rules";
 const emails = ["a@example.com", "b@example.com", "c@example.com"];
 const prompt = "Classify only personally directed employment opportunities.";
@@ -69,6 +83,8 @@ beforeEach(() => {
   state.docs.clear();
   state.labels.clear();
   state.failCommit = false;
+  state.failLabels = false;
+  state.labelCalls.length = 0;
   for (const email of emails) {
     state.docs.set(`accounts/${email}`, {
       email,
@@ -78,6 +94,8 @@ beforeEach(() => {
     state.labels.set(email, [
       { id: `${email}-label`, name: `${email} Recruiting`, type: "user" },
       { id: `${email}-new`, name: "New label", type: "user" },
+      { id: `${email}-protected`, name: "Job Search", type: "user" },
+      { id: `${email}-nested`, name: "Job Search/Active", type: "user" },
     ]);
     state.docs.set(path(email), {
       id: "recruiting",
@@ -121,14 +139,30 @@ it("applies prompt edits atomically, increments versions and preserves all unsel
   });
   const updated = await updateRules("owner@example.com", batch());
   expect(updated).toHaveLength(2);
+  const { draftReplies, preserveJobSearch, ...canonicalBefore } = before;
   expect(updated[0]).toMatchObject({
-    ...before,
+    ...canonicalBefore,
+    protectedLabels: [
+      {
+        labelId: `${emails[0]}-protected`,
+        labelName: "Job Search",
+        includeChildren: true,
+      },
+      {
+        labelId: `${emails[0]}-nested`,
+        labelName: "Job Search/Active",
+        includeChildren: true,
+      },
+    ],
+    replyDraft: { choiceIds: ["recruiting"], body: expect.any(String) },
     prompt,
     choices: [{ ...before.choices[0], labelName: `${emails[0]} Recruiting` }],
     version: 2,
     updatedAt: expect.any(Number),
     lastError: null,
   });
+  expect(updated[0]).not.toHaveProperty("draftReplies");
+  expect(updated[0]).not.toHaveProperty("preserveJobSearch");
   expect(state.docs.get(path(emails[2]))).toEqual(unselected);
   expect(
     state.docs.get(`accounts/${emails[0]}/ruleVersions/recruiting_v2`),
@@ -221,9 +255,13 @@ it("keeps migration prompt and recruiting-specific settings exact", () => {
     prompt,
     scope: "thread",
     threshold: 0.8,
-    draftReplies: true,
-    preserveJobSearch: true,
+    protectedLabels: [
+      { labelId: "L", labelName: "Job Search", includeChildren: true },
+    ],
+    replyDraft: { choiceIds: ["recruiting"], body: expect.any(String) },
   });
+  expect(rule).not.toHaveProperty("draftReplies");
+  expect(rule).not.toHaveProperty("preserveJobSearch");
   expect(rule.choices).toHaveLength(1);
 });
 
@@ -233,4 +271,213 @@ it("rejects edits while any selected mailbox is processing, with no partial writ
     "No rules were changed",
   );
   expect(state.docs.get(path(emails[0])).version).toBe(1);
+});
+
+it("validates arbitrary draft choices and refreshes exact/nested protected label mappings", () => {
+  const before = state.docs.get(path(emails[0]));
+  const rule = validateRule(
+    {
+      ...before,
+      choices: [
+        ...before.choices,
+        {
+          id: "invoice",
+          name: "Invoice",
+          description: "A bill",
+          labelId: `${emails[0]}-new`,
+          labelName: "Old",
+        },
+      ],
+      replyDraft: {
+        choiceIds: ["invoice"],
+        body: "  Thanks for the invoice.\nWe will review it.  ",
+      },
+      protectedLabels: [
+        {
+          labelId: `${emails[0]}-protected`,
+          labelName: "Old",
+          includeChildren: false,
+        },
+        {
+          labelId: `${emails[0]}-nested`,
+          labelName: "Old child",
+          includeChildren: true,
+        },
+      ],
+    },
+    state.labels.get(emails[0])!,
+  );
+  expect(rule.replyDraft).toEqual({
+    choiceIds: ["invoice"],
+    body: "Thanks for the invoice.\nWe will review it.",
+  });
+  expect(rule.protectedLabels).toEqual([
+    {
+      labelId: `${emails[0]}-protected`,
+      labelName: "Job Search",
+      includeChildren: false,
+    },
+    {
+      labelId: `${emails[0]}-nested`,
+      labelName: "Job Search/Active",
+      includeChildren: true,
+    },
+  ]);
+  expect(rule).not.toHaveProperty("draftReplies");
+});
+it.each([
+  { choiceIds: ["missing"], body: "A draft" },
+  { choiceIds: ["no_match"], body: "A draft" },
+  { choiceIds: [], body: "A draft" },
+  { choiceIds: ["recruiting", "recruiting"], body: "A draft" },
+  { choiceIds: ["recruiting"], body: "   " },
+  { choiceIds: ["recruiting"], body: "x".repeat(6001) },
+])("rejects invalid reply draft configuration", (replyDraft) => {
+  expect(() =>
+    validateRule(
+      { ...state.docs.get(path(emails[0])), replyDraft },
+      state.labels.get(emails[0])!,
+    ),
+  ).toThrow();
+});
+it("requires existing user labels for protection and rejects duplicate protected IDs", () => {
+  const before = state.docs.get(path(emails[0]));
+  for (const protectedLabels of [
+    [{ labelId: "missing", labelName: "Missing", includeChildren: false }],
+    [{ labelId: "SENT", labelName: "Sent", includeChildren: false }],
+    [
+      {
+        labelId: `${emails[0]}-protected`,
+        labelName: "Job Search",
+        includeChildren: false,
+      },
+      {
+        labelId: `${emails[0]}-protected`,
+        labelName: "Job Search",
+        includeChildren: true,
+      },
+    ],
+  ])
+    expect(() =>
+      validateRule({ ...before, protectedLabels }, [
+        ...state.labels.get(emails[0])!,
+        { id: "SENT", name: "Sent", type: "system" },
+      ]),
+    ).toThrow();
+});
+it("explicit generic disables cannot be revived by legacy true flags during update", async () => {
+  const input = batch();
+  input.changes = {
+    replyDraft: null,
+    draftReplies: true,
+    preserveJobSearch: true,
+  };
+  for (const target of input.targets) target.protectedLabels = [];
+  const updated = await updateRules("owner@example.com", input);
+  for (const rule of updated) {
+    expect(rule.replyDraft).toBeNull();
+    expect(rule.protectedLabels).toEqual([]);
+    expect(rule).not.toHaveProperty("draftReplies");
+    expect(rule).not.toHaveProperty("preserveJobSearch");
+  }
+  const again = batchRuleSchema.parse({
+    targets: updated.map((rule) => ({
+      email: rule.email,
+      ruleId: rule.id,
+      expectedVersion: rule.version,
+    })),
+    changes: {
+      prompt: "Updated prompt without behavior fields in this request.",
+    },
+  });
+  for (const rule of await updateRules("owner@example.com", again))
+    expect(rule).toMatchObject({ protectedLabels: [], replyDraft: null });
+});
+it("validates mailbox-specific protected labels atomically across a batch", async () => {
+  const input = batch();
+  input.changes = { replyDraft: null };
+  input.targets[0].protectedLabels = [
+    {
+      labelId: `${emails[0]}-protected`,
+      labelName: "Old",
+      includeChildren: true,
+    },
+  ];
+  input.targets[1].protectedLabels = [
+    {
+      labelId: `${emails[0]}-protected`,
+      labelName: "Wrong mailbox",
+      includeChildren: true,
+    },
+  ];
+  await expect(updateRules("owner@example.com", input)).rejects.toThrow(
+    "unavailable",
+  );
+  expect(state.docs.get(path(emails[0])).version).toBe(1);
+  expect(state.docs.get(path(emails[1])).version).toBe(1);
+});
+it("rejects a shared draft referring to a choice absent in any selected rule with no partial write", async () => {
+  const input = batch();
+  input.changes = {
+    replyDraft: { choiceIds: ["invoice"], body: "Thanks for your invoice." },
+  };
+  input.targets[0].choices = [
+    {
+      id: "invoice",
+      name: "Invoice",
+      description: "A bill",
+      labelId: `${emails[0]}-new`,
+      labelName: "New label",
+    },
+  ];
+  await expect(updateRules("owner@example.com", input)).rejects.toThrow(
+    "choices must exist",
+  );
+  expect(state.docs.get(path(emails[0])).version).toBe(1);
+  expect(state.docs.get(path(emails[1])).version).toBe(1);
+});
+it("does not fetch Gmail when generic behaviors exist or both old flags are false", async () => {
+  const before = state.docs.get(path(emails[0]));
+  Object.assign(before, { protectedLabels: [], replyDraft: null });
+  state.failLabels = true;
+  const loaded = await listRulesForAccount(
+    state.docs.get(`accounts/${emails[0]}`),
+  );
+  expect(loaded[0]).toMatchObject({ protectedLabels: [], replyDraft: null });
+  delete before.protectedLabels;
+  delete before.replyDraft;
+  before.draftReplies = false;
+  before.preserveJobSearch = false;
+  await listRulesForAccount(state.docs.get(`accounts/${emails[0]}`));
+  expect(state.labelCalls).toHaveLength(0);
+});
+it("returns a clear failure rather than silently dropping legacy protections when Gmail is unavailable", async () => {
+  const before = structuredClone(state.docs.get(path(emails[0])));
+  state.failLabels = true;
+  await expect(
+    listRulesForAccount(state.docs.get(`accounts/${emails[0]}`)),
+  ).rejects.toMatchObject({
+    status: 503,
+    message: expect.stringContaining("protections have not been changed"),
+  });
+  expect(state.docs.get(path(emails[0]))).toEqual(before);
+});
+
+it("defaults new generic rules to no protections and no draft", () => {
+  const { draftReplies, preserveJobSearch, ...plain } = state.docs.get(
+    path(emails[0]),
+  );
+  expect(validateRule(plain, state.labels.get(emails[0])!)).toMatchObject({
+    protectedLabels: [],
+    replyDraft: null,
+  });
+});
+it("leaves the original immutable legacy snapshot untouched when saving canonical behavior", async () => {
+  const before = structuredClone(state.docs.get(path(emails[0])));
+  const versionPath = `accounts/${emails[0]}/ruleVersions/recruiting_v1`;
+  state.docs.set(versionPath, before);
+  await updateRules("owner@example.com", batch());
+  expect(state.docs.get(versionPath)).toEqual(before);
+  expect(state.docs.get(path(emails[0])).version).toBe(2);
+  expect(state.docs.get(path(emails[0]))).not.toHaveProperty("draftReplies");
 });

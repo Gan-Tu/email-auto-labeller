@@ -23,11 +23,31 @@ export function validateRule(rule: RuleInput) {
     return "Each choice needs a name, description, and Gmail label.";
   if (new Set(rule.choices.map((c) => c.labelId)).size !== rule.choices.length)
     return "Choose a different Gmail label for each choice.";
+  const protectedLabels = rule.protectedLabels ?? [];
+  if (protectedLabels.length > 50) return "Use at most 50 protected labels.";
+  if (protectedLabels.some((label) => !label.labelId))
+    return "Choose a Gmail label for every protected label row.";
   if (
-    rule.draftReplies &&
-    (rule.choices.length !== 1 || rule.choices[0].id !== "recruiting")
+    new Set(protectedLabels.map((label) => label.labelId)).size !==
+    protectedLabels.length
   )
-    return "Decline drafts require the single Recruiting choice. Turn off drafts before changing choices.";
+    return "Select each protected label only once.";
+  if (rule.replyDraft) {
+    if (!rule.replyDraft.choiceIds.length)
+      return "Select at least one choice for reply drafts.";
+    if (missingDraftChoiceIds(rule).length)
+      return "A reply draft refers to a removed choice. Update its selected choices or turn off reply drafts.";
+    if (
+      new Set(rule.replyDraft.choiceIds).size !==
+      rule.replyDraft.choiceIds.length
+    )
+      return "Select each reply draft choice only once.";
+    if (
+      !rule.replyDraft.body.trim() ||
+      rule.replyDraft.body.trim().length > 6000
+    )
+      return "Write a reply draft between 1 and 6,000 characters.";
+  }
   const names = rule.choices.map((c) => c.name.trim().toLowerCase());
   if (new Set(names).size !== names.length || names.includes("no match"))
     return "Give each choice a different name. No match is already included.";
@@ -47,13 +67,29 @@ export function cleanRule(rule: RuleInput): RuleInput {
       name: c.name.trim(),
       description: c.description.trim(),
     })),
-    ...(rule.draftReplies === undefined
-      ? {}
-      : { draftReplies: rule.draftReplies }),
-    ...(rule.preserveJobSearch === undefined
-      ? {}
-      : { preserveJobSearch: rule.preserveJobSearch }),
+    protectedLabels: (rule.protectedLabels ?? []).map((label) => ({
+      labelId: label.labelId,
+      labelName: label.labelName,
+      includeChildren: label.includeChildren,
+    })),
+    replyDraft: rule.replyDraft
+      ? {
+          choiceIds: [...rule.replyDraft.choiceIds],
+          body: rule.replyDraft.body.trim(),
+        }
+      : null,
   };
+}
+export function missingDraftChoiceIds(
+  rule: Pick<RuleInput, "replyDraft" | "choices">,
+  choices = rule.choices,
+) {
+  const available = new Set(choices.map((choice) => choice.id));
+  return (
+    rule.replyDraft?.choiceIds.filter(
+      (id) => id === "no_match" || !available.has(id),
+    ) ?? []
+  );
 }
 export function ruleKey(rule: Pick<Rule, "email" | "id">) {
   return `${rule.email}:${rule.id}`;

@@ -15,6 +15,7 @@ Each mailbox has independent rules. A rule combines a classification prompt with
 - **Mailbox-specific rules:** up to 20 rules per mailbox and 12 labeled choices per rule. No match is always included.
 - **Structured editor:** write a prompt, describe each answer, and select labels from the connected mailbox. Labels are stored by ID, so renaming a label preserves its mapping.
 - **Batch editing:** update prompts, choices, thresholds, or enabled states across selected rules and inboxes. Keep/Replace controls preserve unselected fields; per-mailbox label mapping and a review step precede an atomic update.
+- **Rule behavior:** protect conversations by existing labels, including optional nested labels, and prepare editable reply drafts for selected choices.
 - **Dry-run tests:** classify pasted email text or an existing Gmail message using unsaved settings, without changing Gmail.
 - **Activity history:** inspect each rule's answer, selected probability, applied label, uncertainty, and errors.
 - **Reliable processing:** durable message jobs, versioned rule snapshots, saved predictions, and retryable Gmail actions.
@@ -73,7 +74,11 @@ This is a self-hosted, allowlisted workspace. Configure `OWNER_EMAIL` and `ALLOW
 
 Refresh tokens are encrypted with AES-256-GCM. Email bodies are processed in memory and sent to OpenAI for classification. Activity stores subjects and decision metadata with expiration timestamps; configure Firestore TTL policies as described in the deployment guide. The UI displays the latest 500 records in pages of 25.
 
-An optional recruiting-specific action can prepare a decline **draft**, never send it. It requires the single Recruiting choice and checks for prior replies, LinkedIn messages, and existing drafts. Review the draft text before enabling this action; `DECLINE_REPLY_TEXT` can supply a custom reply. Multiple-choice replacement disables incompatible recruiting drafts explicitly.
+Every rule can protect up to 50 existing labels, optionally including nested labels. If any selected label is present, the entire conversation is skipped. An optional reply draft supports one or more of the rule’s choices and editable plain text of up to 6,000 characters. Drafts are prepared only for selected matches at or above the threshold; replied conversations, existing drafts, and automated messages are skipped. Drafts are never sent.
+
+Removing a choice used by a draft requires an explicit adjustment or disabling the draft. Batch updates preserve existing protections and draft bodies unless disabling drafts is explicitly confirmed. `DECLINE_REPLY_TEXT` is used only when converting older recruiting draft settings into the per-rule body; new draft text is configured in the rule editor.
+
+See [OAuth verification readiness](docs/oauth-verification.md) for public disclosure pages, consent-screen configuration, and the verification process.
 
 ## Deployment
 
@@ -88,7 +93,7 @@ The included container runs on Cloud Run. The [deployment guide](docs/deployment
 - `server/classifier.ts` — Decisions questions and response parsing.
 - `server/store.ts`, `server/worker.ts` — durable ingestion, retries, Gmail actions, and activity.
 - `scripts/` — deployment, migration, and verification tools.
-- `docs/` — [setup](docs/setup.md), [deployment](docs/deployment.md), and [UI design decisions](docs/ui-decisions.md).
+- `docs/` — [setup](docs/setup.md), [deployment](docs/deployment.md), [OAuth verification](docs/oauth-verification.md), and [UI design decisions](docs/ui-decisions.md).
 
 ## References
 

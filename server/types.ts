@@ -3,6 +3,8 @@ export interface Account {
   owner: string;
   refreshToken: string;
   clientType: "legacy" | "web";
+  /** Identifies the OAuth client that issued the encrypted refresh token. */
+  oauthClientId?: string;
   /** Legacy settings retained only to migrate the existing recruiting configuration. */
   label: string;
   enabled: boolean;
@@ -17,6 +19,8 @@ export interface Account {
   lastError?: string | null;
   rulesRevision?: number;
   rulesMigratedAt?: number;
+  dataConsentVersion?: string;
+  dataConsentAt?: number;
 }
 export interface RuleChoice {
   id: string;
@@ -24,6 +28,15 @@ export interface RuleChoice {
   description: string;
   labelId: string;
   labelName: string;
+}
+export interface ProtectedLabel {
+  labelId: string;
+  labelName: string;
+  includeChildren: boolean;
+}
+export interface ReplyDraft {
+  choiceIds: string[];
+  body: string;
 }
 export interface Rule {
   id: string;
@@ -34,8 +47,11 @@ export interface Rule {
   threshold: number;
   scope: "message" | "thread";
   choices: RuleChoice[];
-  draftReplies: boolean;
-  preserveJobSearch: boolean;
+  protectedLabels?: ProtectedLabel[];
+  replyDraft?: ReplyDraft | null;
+  /** Legacy inputs and immutable historical snapshots only. New writes use generic behavior fields. */
+  draftReplies?: boolean;
+  preserveJobSearch?: boolean;
   version: number;
   createdAt: number;
   updatedAt: number;

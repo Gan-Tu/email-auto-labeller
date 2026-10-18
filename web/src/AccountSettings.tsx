@@ -91,6 +91,34 @@ export function AccountSettings({
             </dd>
           </div>
         </dl>
+        <section
+          className="connection-guidance"
+          aria-labelledby="connection-data-heading"
+        >
+          <h3 id="connection-data-heading">Connection and data</h3>
+          <p>
+            Disconnect removes this app’s stored Gmail token and stops
+            processing. Your rules and activity history remain. Gmail labels and
+            drafts stay unchanged.
+          </p>
+          <p>
+            <a href="/support">
+              Contact support to request deletion of stored app data.
+            </a>
+          </p>
+          <p>
+            To revoke Google access, visit{" "}
+            <a
+              href="https://myaccount.google.com/connections"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Google Account connections (opens a new tab)
+            </a>
+            . If other apps share this Google authorization, revoking it can
+            disconnect them too.
+          </p>
+        </section>
         {error ? (
           <p className="error" role="alert">
             {error}
@@ -99,8 +127,9 @@ export function AccountSettings({
         {confirmDisconnect ? (
           <div className="disconnect-confirm">
             <p>
-              Disconnect {account.email}? Classification will stop and Gmail
-              access will be removed from this app.
+              Disconnect {account.email}? This removes the stored Gmail token
+              and stops processing. Rules and activity history are kept. Labels
+              and drafts in Gmail stay unchanged.
             </p>
             <div className="inline-actions">
               <button

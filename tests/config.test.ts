@@ -70,3 +70,50 @@ it("uses a neutral draft by default and accepts explicitly configured wording", 
       .declineReplyText,
   ).toBe("My configured reply");
 });
+
+it.each(["PREVIOUS_WEB_GOOGLE", "LEGACY_GOOGLE"])(
+  "requires complete optional production credential pairs: %s",
+  (prefix) => {
+    expect(() =>
+      loadConfig({ ...production, [`${prefix}_CLIENT_ID`]: "test-client" }),
+    ).toThrow("configured together");
+    expect(() =>
+      loadConfig({ ...production, [`${prefix}_CLIENT_SECRET`]: "test-secret" }),
+    ).toThrow("configured together");
+  },
+);
+it("requires an explicit previous-client topic in production and validates optional topic paths", () => {
+  const previous = {
+    PREVIOUS_WEB_GOOGLE_CLIENT_ID: "previous-client",
+    PREVIOUS_WEB_GOOGLE_CLIENT_SECRET: "previous-test-secret",
+  };
+  expect(() => loadConfig({ ...production, ...previous })).toThrow(
+    "PREVIOUS_WEB_GMAIL_TOPIC is required",
+  );
+  expect(() =>
+    loadConfig({ ...production, LEGACY_GMAIL_TOPIC: "bad-topic" }),
+  ).toThrow("LEGACY_GMAIL_TOPIC must be");
+  const config = loadConfig({
+    ...production,
+    ...previous,
+    PREVIOUS_WEB_GMAIL_TOPIC: "projects/old-project/topics/gmail",
+  });
+  expect(config.previousWebTopic).toBe("projects/old-project/topics/gmail");
+  expect(config.legacyTopic).toBe(config.previousWebTopic);
+});
+
+it("supports only explicitly configured push identities during OAuth project migration", () => {
+  const config = loadConfig({
+    ...production,
+    ADDITIONAL_PUSH_SERVICE_ACCOUNTS:
+      "new-push@oauth-project.iam.gserviceaccount.com,PUSH@example-project.iam.gserviceaccount.com",
+  });
+  expect(config.pushEmails).toEqual([
+    "push@example-project.iam.gserviceaccount.com",
+    "new-push@oauth-project.iam.gserviceaccount.com",
+  ]);
+  expect(() =>
+    loadConfig({ ...production, ADDITIONAL_PUSH_SERVICE_ACCOUNTS: "*" }),
+  ).toThrow("Service account identities must be email addresses");
+  expect(loadConfig({ NODE_ENV: "test" }).pushEmails).toEqual([]);
+});

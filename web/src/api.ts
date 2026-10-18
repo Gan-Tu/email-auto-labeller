@@ -7,7 +7,6 @@ export interface Account {
   email: string;
   label?: string;
   enabled: boolean;
-  draftReplies?: boolean;
   threshold?: number;
   classificationPrompt?: string | null;
   watchExpires: number;
@@ -27,6 +26,15 @@ export interface RuleChoice {
   labelId: string;
   labelName: string;
 }
+export interface ProtectedLabel {
+  labelId: string;
+  labelName: string;
+  includeChildren: boolean;
+}
+export interface ReplyDraft {
+  choiceIds: string[];
+  body: string;
+}
 export interface RuleInput {
   name: string;
   prompt: string;
@@ -34,8 +42,8 @@ export interface RuleInput {
   threshold: number;
   scope: "message" | "thread";
   choices: RuleChoice[];
-  draftReplies?: boolean;
-  preserveJobSearch?: boolean;
+  protectedLabels?: ProtectedLabel[];
+  replyDraft?: ReplyDraft | null;
 }
 export interface Rule extends RuleInput {
   id: string;
