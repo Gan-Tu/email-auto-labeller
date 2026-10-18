@@ -200,7 +200,7 @@ export function DecisionHistory({ accounts }: { accounts: Account[] }) {
                       {d.subject || "(No subject)"}
                     </a>
                     {d.draft === "created" && (
-                      <small>Decline draft prepared</small>
+                      <small>Reply draft prepared</small>
                     )}
                     {d.reason && (
                       <small>
