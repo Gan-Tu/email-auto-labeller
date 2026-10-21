@@ -32,6 +32,11 @@ export function isExcludedMail(decision: Decision) {
       decision.reason === "Not incoming mail")
   );
 }
+function hasCompletedAction(decision: Decision) {
+  return decision.actions
+    ? decision.actions.some((action) => action.status === "completed")
+    : decision.outcome === "labeled" || decision.draft === "created";
+}
 export function filteredHistory(
   decisions: Decision[],
   filter: OutcomeFilter,
@@ -42,15 +47,9 @@ export function filteredHistory(
       (showExcluded || !isExcludedMail(d)) &&
       (filter === "all" ||
         (filter === "applied"
-          ? d.outcome === "labeled" ||
-            d.outcome === "matched" ||
-            d.actions?.some((action) => action.status === "completed")
+          ? hasCompletedAction(d)
           : filter === "not_applied"
-            ? !(
-                d.outcome === "labeled" ||
-                d.outcome === "matched" ||
-                d.actions?.some((action) => action.status === "completed")
-              )
+            ? !hasCompletedAction(d)
             : filter === "no_match"
               ? d.outcome === "no_match" || d.outcome === "not_recruiting"
               : d.outcome === filter)),

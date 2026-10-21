@@ -78,3 +78,28 @@ it("merges incremental updates by mailbox and message without discarding older p
   expect(after.filter((d) => d.messageId === "00499")).toHaveLength(2);
   expect(after.some((d) => d.messageId === "00001")).toBe(false);
 });
+
+it("counts only confirmed actions as completed, retaining partial successes", () => {
+  const unknown = {
+    ...record(1, "a@example.com", "matched"),
+    actions: [{ type: "forward" as const, status: "unknown" as const }],
+  };
+  const partial = {
+    ...record(2, "a@example.com", "failed"),
+    actions: [
+      { type: "markRead" as const, status: "completed" as const },
+      { type: "forward" as const, status: "failed" as const },
+    ],
+  };
+  const draft = {
+    ...record(3, "a@example.com", "matched"),
+    actions: [{ type: "draft" as const, status: "completed" as const }],
+  };
+  expect(filteredHistory([unknown, partial, draft], "applied")).toEqual([
+    partial,
+    draft,
+  ]);
+  expect(filteredHistory([unknown, partial, draft], "not_applied")).toEqual([
+    unknown,
+  ]);
+});
