@@ -275,7 +275,10 @@ describe("choice action configuration", () => {
   });
   it("reports completed non-label actions and partial successes in activity", () => {
     const rows = [
-      decision("read", 1, "matched"),
+      {
+        ...decision("read", 1, "matched"),
+        actions: [{ type: "markRead" as const, status: "completed" as const }],
+      },
       {
         ...decision("partial", 1, "failed"),
         actions: [{ type: "markRead" as const, status: "completed" as const }],
