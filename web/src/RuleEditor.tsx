@@ -20,6 +20,7 @@ import {
   type User,
 } from "./api";
 import { Dialog } from "./Dialog";
+import { PromptAssistant } from "./PromptAssistant";
 import { ChoiceEditor } from "./ChoiceEditor";
 import {
   cleanRule,
@@ -307,6 +308,17 @@ export function RuleEditor({
                 possible answer.
               </small>
             </div>
+            <PromptAssistant
+              user={user}
+              context={{
+                currentPrompt: form.prompt,
+                name: form.name,
+                scope: form.scope,
+                choices: form.choices,
+              }}
+              onUse={(prompt) => change({ prompt })}
+              disabled={busy || testBusy}
+            />
             {labelError ? (
               <div className="error" role="alert">
                 Could not load Gmail labels. {labelError}

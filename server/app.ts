@@ -1,3 +1,9 @@
+import {
+  draftClassificationPrompt,
+  promptAssistantOptions,
+  promptAssistantSchema,
+  PromptAssistantError,
+} from "./prompt-assistant.js";
 import express from "express";
 import { mountPublicPages } from "./public-pages.js";
 import { showOAuthDisclosure } from "./oauth-disclosure.js";
@@ -154,6 +160,14 @@ export function createApp() {
   );
   app.use("/api", requireSession);
   app.post("/api/logout", csrf, logout);
+  app.get("/api/prompt-assistant/options", (_req, res) =>
+    res.json(promptAssistantOptions),
+  );
+  app.post("/api/prompt-assistant/draft", csrf, async (req, res) => {
+    res.json(
+      await draftClassificationPrompt(promptAssistantSchema.parse(req.body)),
+    );
+  });
   app.get("/api/accounts", async (req, res) =>
     res.json({
       accounts: (await listAccounts())
@@ -402,7 +416,7 @@ export function createApp() {
       res: express.Response,
       _next: express.NextFunction,
     ) => {
-      if (error instanceof RuleError) {
+      if (error instanceof RuleError || error instanceof PromptAssistantError) {
         res.status(error.status).json({ error: error.message });
         return;
       }

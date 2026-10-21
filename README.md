@@ -14,6 +14,7 @@ Each mailbox has independent rules. A rule combines a classification prompt with
 
 - **Mailbox-specific rules:** up to 20 rules per mailbox and 12 choices per rule. No match is always included.
 - **Structured editor:** write a prompt, describe each answer, and choose one or more actions: add Gmail labels, create a reply draft, mark as read, or forward to an email address. Labels are stored by ID, so renaming a label preserves its mapping.
+- **AI prompt drafting:** describe what to classify and preview a suggested prompt before using it. Available in the single-rule and batch prompt editors, with GPT-6.1 Sol, GPT-6 Astra, and GPT-6 Luna; model-supported reasoning effort; and Normal/Fast processing. Defaults to GPT-6.1 Sol, medium effort, Fast. Using a draft updates only the unsaved prompt.
 - **Batch editing:** update prompts, choices, thresholds, or enabled states across selected rules and inboxes. Keep/Replace controls preserve unselected fields; per-mailbox label mapping and a review step precede an atomic update.
 - **Rule behavior:** protect conversations by existing labels, including optional nested labels, and prepare editable reply drafts for selected choices.
 - **Dry-run tests:** classify pasted email text or an existing Gmail message using unsaved settings, without changing Gmail.
@@ -21,6 +22,10 @@ Each mailbox has independent rules. A rule combines a classification prompt with
 - **Reliable processing:** durable message jobs, versioned rule snapshots, saved predictions, and retryable Gmail actions.
 
 Each enabled rule independently selects at most one choice. A choice can add multiple labels and combine any of the four actions. All actions start off: no labels, no draft, no forwarding, and unchanged read status. Saving requires at least one action per choice; the automatic No match choice has no actions. No match, refusal, and low-probability results leave Gmail unchanged. Drafts stay unsent; an explicitly configured forwarding action sends an email to its destination.
+
+The prompt helper uses the OpenAI Responses API with the server's existing `OPENAI_API_KEY`. It sends your drafting instructions, current prompt, rule name, scope, and choice definitions; it does not fetch emails or run Gmail actions. Requests use `store: false`. Fast requests use `service_tier: "fast"`, while Normal uses `"default"`; Fast processing can cost more and the service may serve a different tier. These settings affect prompt drafting only, not the Decisions API model used for automatic classification.
+
+Model options and supported effort levels are centralized in `server/prompt-assistant.ts`. They reflect the current [Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) API models; update this catalog as new models are released. See [Fast mode](https://developers.openai.com/api/docs/guides/priority-processing) for processing behavior.
 
 ## Quick start
 

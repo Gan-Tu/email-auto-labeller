@@ -2413,3 +2413,30 @@ select:not([multiple]):disabled {
   color: #18724a;
   background: #e9f7ef;
 }
+
+.prompt-assistant {
+  margin: 12px 0 20px;
+}
+.prompt-assistant-body {
+  border: 1px solid #dce5dd;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 10px;
+  background: #f8faf7;
+}
+.prompt-assistant-settings {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 12px;
+}
+.prompt-assistant-review {
+  border-top: 1px solid #dce5dd;
+  padding-top: 16px;
+  margin-top: 16px;
+}
+@media (max-width: 650px) {
+  .prompt-assistant-settings {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}

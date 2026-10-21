@@ -13,6 +13,7 @@ import {
 import { Dialog } from "./Dialog";
 import { sortLabels } from "./labels";
 import { ActionEditor } from "./ActionEditor";
+import { PromptAssistant } from "./PromptAssistant";
 import { ChoiceEditor } from "./ChoiceEditor";
 import {
   choiceActions,
@@ -287,6 +288,34 @@ export function BatchRuleEditor({
                     onChange={(e) => setPrompt(e.target.value)}
                   />
                 </label>
+                <PromptAssistant
+                  user={user}
+                  context={{
+                    currentPrompt: prompt,
+                    name:
+                      rules.find((rule) => ruleKey(rule) === source)?.name ??
+                      "Selected rules",
+                    scope:
+                      rules.find((rule) => ruleKey(rule) === source)?.scope ??
+                      rules[0]?.scope ??
+                      "message",
+                    choices: fields.choices
+                      ? choices
+                      : ((
+                          rules.find((rule) => ruleKey(rule) === source) ??
+                          rules[0]
+                        )?.choices ?? []),
+                  }}
+                  onUse={setPrompt}
+                  disabled={busy}
+                />
+                {!fields.choices && (
+                  <p className="hint">
+                    The assistant uses choices from the source rule, or the
+                    first selected rule when no source is chosen. Review the
+                    draft for all selected rules.
+                  </p>
+                )}
                 {promptVariants > 1 ? (
                   <label className="check-field">
                     <input
