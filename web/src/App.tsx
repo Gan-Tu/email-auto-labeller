@@ -71,6 +71,9 @@ export default function App() {
     [error, setError] = useState(""),
     [refreshing, setRefreshing] = useState(false),
     [loaded, setLoaded] = useState(false),
+    [ruleErrors, setRuleErrors] = useState<
+      { email: string; message: string }[]
+    >([]),
     [defaultPrompt, setDefaultPrompt] = useState("");
   const selectAll = useRef<HTMLInputElement>(null);
   const refresh = useCallback(async () => {
@@ -78,12 +81,19 @@ export default function App() {
     try {
       const [a, r] = await Promise.all([
         api<{ accounts: Account[]; prompt: string }>("/api/accounts"),
-        api<{ rules: Rule[]; defaultPrompt: string }>("/api/rules"),
+        api<{
+          rules: Rule[];
+          defaultPrompt: string;
+          errors?: { email: string; message: string }[];
+        }>("/api/rules"),
       ]);
       setAccounts(a.accounts);
       setRules(r.rules);
       setDefaultPrompt(r.defaultPrompt || a.prompt || "");
-      setError("");
+      setError(
+        (r.errors ?? []).map((e) => `${e.email}: ${e.message}`).join(" "),
+      );
+      setRuleErrors(r.errors ?? []);
       setLoaded(true);
       setSelected((previous) =>
         previous.filter((key) => r.rules.some((rule) => ruleKey(rule) === key)),
@@ -568,14 +578,18 @@ export default function App() {
                     <h3>
                       {rules.length
                         ? "No rules match these filters"
-                        : "Create your first classification rule"}
+                        : ruleErrors.length > 0
+                          ? "Rules are temporarily unavailable"
+                          : "Create your first classification rule"}
                     </h3>
                     <p>
                       {rules.length
                         ? "Try another mailbox, status, or search term."
-                        : "Start with Recruiting, or describe a different category of email."}
+                        : ruleErrors.length > 0
+                          ? "Your saved rules have not changed. Reconnect the affected mailbox or try again."
+                          : "Start with Recruiting, or describe a different category of email."}
                     </p>
-                    {!rules.length ? (
+                    {!rules.length && !ruleErrors.length ? (
                       accounts.length ? (
                         <button
                           className="primary"
@@ -641,11 +655,10 @@ export default function App() {
                         <div className="mailbox-info">
                           <h3>{account.email}</h3>
                           <p>
-                            {
-                              rules.filter((r) => r.email === account.email)
-                                .length
-                            }{" "}
-                            rules · Last sync{" "}
+                            {ruleErrors.some((e) => e.email === account.email)
+                              ? "Rules unavailable"
+                              : `${rules.filter((r) => r.email === account.email).length} rules`}
+                            {" · Last sync "}
                             {account.lastSync
                               ? new Date(account.lastSync).toLocaleString()
                               : "not yet"}

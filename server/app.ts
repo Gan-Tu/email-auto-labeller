@@ -165,10 +165,25 @@ export function createApp() {
     const accounts = (await listAccounts()).filter((a) =>
       canAccess(req.session!.email, a),
     );
+    const results = await Promise.all(
+      accounts.map(async (account) => {
+        try {
+          return { rules: await listRulesForAccount(account), errors: [] };
+        } catch (error) {
+          // Keep unresolved legacy protections intact; never normalize with
+          // missing labels or let one Gmail outage hide every other mailbox.
+          if (!(error instanceof RuleError) || error.status !== 503)
+            throw error;
+          return {
+            rules: [],
+            errors: [{ email: account.email, message: error.message }],
+          };
+        }
+      }),
+    );
     res.json({
-      rules: (
-        await Promise.all(accounts.map((a) => listRulesForAccount(a)))
-      ).flat(),
+      rules: results.flatMap((result) => result.rules),
+      errors: results.flatMap((result) => result.errors),
       defaultPrompt: RECRUITING_PROMPT,
     });
   });
