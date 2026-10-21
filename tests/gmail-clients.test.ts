@@ -37,6 +37,40 @@ afterEach(() => {
   Object.assign(config, savedTopics);
 });
 describe("Per-mailbox OAuth transition", () => {
+  it("supports retiring both migration clients without changing current mailbox routing", () => {
+    const currentOnly = {
+      GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID,
+      GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET,
+    };
+    const currentTopics = {
+      topic: topics.topic,
+      previousWebTopic: "",
+      legacyTopic: "",
+    };
+    expect(
+      resolveGmailClient(
+        { clientType: "web", oauthClientId: "current-client" },
+        currentOnly,
+        currentTopics,
+      ),
+    ).toEqual({
+      kind: "current",
+      clientId: "current-client",
+      clientSecret: "current-test-secret",
+      topic: topics.topic,
+    });
+    expect(() =>
+      resolveGmailClient(
+        { clientType: "web", oauthClientId: "previous-client" },
+        currentOnly,
+        currentTopics,
+      ),
+    ).toThrow("Reconnect Gmail");
+    expect(() =>
+      resolveGmailClient({ clientType: "legacy" }, currentOnly, currentTopics),
+    ).toThrow("Missing configuration: LEGACY_GOOGLE_CLIENT_ID");
+  });
+
   it.each([
     [
       { clientType: "web", oauthClientId: "current-client" },

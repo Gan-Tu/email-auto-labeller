@@ -133,3 +133,11 @@ Old single-label mappings and selected-choice reply templates are normalized on 
 Action results are checkpointed independently. `forwardIntents` account subcollections reserve each message/destination across rules, versions, and retries. Pending or unknown delivery is never automatically resent. Keep both `draftIntents` and `forwardIntents` outside completion-based TTL cleanup; include them in manual account-data deletion and rollback reconciliation. Deleting reservations while old jobs can replay can duplicate external actions.
 
 Validate draft-only, read-only, multi-label, and forwarding combinations with mocked Gmail writes. Live forwarding verification sends real email and must use an explicitly authorized controlled destination. Dry-run previews do not execute any action.
+
+## Retire migration OAuth credentials
+
+After reconnecting every mailbox, verify that every account (including paused accounts) has `clientType: web` and an explicit `oauthClientId` matching the current `GOOGLE_CLIENT_ID`. Check other services and jobs for shared dependencies before retiring credentials.
+
+Remove the `PREVIOUS_WEB_GOOGLE_CLIENT_ID`, `PREVIOUS_WEB_GOOGLE_CLIENT_SECRET`, `LEGACY_GOOGLE_CLIENT_ID`, and `LEGACY_GOOGLE_CLIENT_SECRET` secret bindings from Cloud Run, plus `PREVIOUS_WEB_GMAIL_TOPIC` and `LEGACY_GMAIL_TOPIC`. Keep the current OAuth pair and `GMAIL_TOPIC`. The application already supports this configuration; subsequent source deployments preserve it.
+
+Verify the new revision and authenticated mailbox reads before deleting the old secrets. Historical revisions retain their old references and cannot safely be restarted after deletion; roll back code by deploying the older image with the current configuration instead. Retiring Secret Manager entries does not delete OAuth clients or Pub/Sub infrastructure.
