@@ -1,4 +1,11 @@
-import type { Label, ProtectedLabel, ReplyDraft, Rule } from "./types.js";
+import type {
+  ChoiceActions,
+  RuleChoice,
+  Label,
+  ProtectedLabel,
+  ReplyDraft,
+  Rule,
+} from "./types.js";
 
 export type NormalizedRule = Omit<
   Rule,
@@ -13,7 +20,40 @@ const legacyLabelName = (name: string) =>
 /** Only old enabled behaviors need live migration input. Explicit []/null always wins. */
 export const needsLegacyBehavior = (rule: Rule) =>
   (rule.protectedLabels === undefined && rule.preserveJobSearch === true) ||
-  (rule.replyDraft === undefined && rule.draftReplies === true);
+  (rule.replyDraft === undefined &&
+    rule.draftReplies === true &&
+    rule.choices.some((choice) => choice.actions === undefined));
+
+/** Resolve old snapshots without mutating them. Normalize legacy recruiting flags first. */
+export function normalizeChoiceActions(
+  rule: Rule,
+  choice: RuleChoice,
+): ChoiceActions {
+  if (choice.actions !== undefined)
+    return {
+      labels: choice.actions.labels.map((label) => ({ ...label })),
+      replyDraft: choice.actions.replyDraft
+        ? { ...choice.actions.replyDraft }
+        : null,
+      markRead: choice.actions.markRead,
+      forward: choice.actions.forward ? { ...choice.actions.forward } : null,
+    };
+  return {
+    labels: choice.labelId
+      ? [
+          {
+            labelId: choice.labelId,
+            labelName: choice.labelName ?? choice.labelId,
+          },
+        ]
+      : [],
+    replyDraft: rule.replyDraft?.choiceIds.includes(choice.id)
+      ? { body: rule.replyDraft.body }
+      : null,
+    markRead: false,
+    forward: null,
+  };
+}
 
 /** Pure conversion: never rewrites the supplied rule or any historical version. */
 export function normalizeRuleBehavior(
@@ -50,7 +90,10 @@ export function normalizeRuleBehavior(
     replyDraft = rule.replyDraft
       ? { ...rule.replyDraft, choiceIds: [...rule.replyDraft.choiceIds] }
       : null;
-  else if (draftReplies) {
+  else if (
+    draftReplies &&
+    rule.choices.some((choice) => choice.actions === undefined)
+  ) {
     if (rule.choices.length !== 1 || rule.choices[0].id !== "recruiting")
       throw new RuleBehaviorError(
         "Legacy recruiting drafts require exactly the Recruiting choice; configure an explicit reply draft to change this behavior",
@@ -62,5 +105,13 @@ export function normalizeRuleBehavior(
       );
     replyDraft = { choiceIds: ["recruiting"], body };
   } else replyDraft = null;
-  return { ...canonical, protectedLabels, replyDraft };
+  return {
+    ...canonical,
+    protectedLabels,
+    replyDraft,
+    choices: rule.choices.map((choice) => ({
+      ...choice,
+      actions: normalizeChoiceActions({ ...rule, replyDraft }, choice),
+    })),
+  };
 }

@@ -17,6 +17,8 @@ const state = vi.hoisted(() => ({
   request: vi.fn(),
   classify: vi.fn(),
   label: vi.fn(),
+  markRead: vi.fn(),
+  forward: vi.fn(),
   fullContext: vi.fn(),
   events: [] as string[],
   rules: [] as Rule[],
@@ -48,6 +50,7 @@ vi.mock("../server/store", () => ({
   accountRef: () => ({
     collection: (name: string) => ({
       doc: (id: string) => ({
+        get: async () => ({ data: () => state.intents.get(`${name}/${id}`) }),
         create: async (value: any) => {
           if (state.intents.has(`${name}/${id}`))
             throw Object.assign(new Error("Already exists"), { code: 6 });
@@ -118,6 +121,7 @@ vi.mock("../server/store", () => ({
     state.decisions.set(d.executionId!, structuredClone(d));
   },
 }));
+vi.mock("../server/forward", () => ({ forwardMessage: state.forward }));
 vi.mock("../server/classifier", () => ({
   classifyRules: state.classify,
   NO_MATCH: "no_match",
@@ -137,6 +141,7 @@ vi.mock("../server/gmail", () => ({
     request = state.request;
     fullContext = state.fullContext;
     label = state.label;
+    markRead = state.markRead;
     labels = async () => [
       { id: "L1", name: "Work", type: "user" },
       { id: "L2", name: "Finance", type: "user" },
@@ -210,6 +215,8 @@ beforeEach(() => {
   state.jobs = [];
   state.processing = true;
   state.active = true;
+  state.forward.mockResolvedValue({ status: "sent" });
+  state.markRead.mockResolvedValue(undefined);
   state.failSaveDecided = false;
   state.failCompletedActivity = false;
   state.account.historyId = "100";
@@ -509,7 +516,9 @@ it.each([false, true])(
         (c) => c[0] === "drafts" && c[1] === "POST",
       ),
     ).toHaveLength(1);
-    expect(state.decisions.get("next:work:1")?.draft).toBe("skipped");
+    expect(state.decisions.get("next:work:1")?.draft).toBe(
+      ambiguous ? "unknown" : "skipped",
+    );
   },
 );
 
@@ -648,5 +657,263 @@ it("does not classify or act when a protected label was deleted", async () => {
   expect(state.decisions.get("m:work:1")).toMatchObject({
     outcome: "failed",
     reason: expect.stringContaining("Protected label unavailable"),
+  });
+});
+
+describe("independent match actions", () => {
+  const configure = (overrides: any = {}) => {
+    state.rules[0].choices[0].actions = {
+      labels: [],
+      replyDraft: null,
+      markRead: false,
+      forward: null,
+      ...overrides,
+    };
+    state.thread.mockImplementation(async () => ({
+      id: "t",
+      messages: [
+        {
+          id: "m",
+          threadId: "t",
+          internalDate: "2",
+          labelIds: ["UNREAD", ...(state.applied.get("m") ?? [])],
+          payload: {
+            headers: [
+              { name: "from", value: "person@example.com" },
+              { name: "message-id", value: "<m@example.com>" },
+            ],
+          },
+        },
+        { id: "older", threadId: "t", internalDate: "1", labelIds: ["UNREAD"] },
+      ],
+    }));
+    state.request.mockImplementation(async (path: string) =>
+      path.startsWith("drafts?")
+        ? { drafts: [] }
+        : { id: "m", threadId: "t", internalDate: "2" },
+    );
+  };
+  it("creates a draft without any labeling or read changes", async () => {
+    configure({ replyDraft: { body: "Thanks!" } });
+    await processJob(new Gmail(state.account as any), job());
+    expect(state.label).not.toHaveBeenCalled();
+    expect(state.markRead).not.toHaveBeenCalled();
+    expect(state.forward).not.toHaveBeenCalled();
+    expect(state.decisions.get("m:work:1")).toMatchObject({
+      outcome: "matched",
+      actions: [{ type: "draft", status: "completed" }],
+    });
+  });
+  it("marks only the matched message read without labels", async () => {
+    configure({ markRead: true });
+    await processJob(new Gmail(state.account as any), job());
+    expect(state.markRead).toHaveBeenCalledWith(["m"]);
+    expect(state.label).not.toHaveBeenCalled();
+  });
+  it("uses conversation scope for read changes but forwards only the matched incoming message", async () => {
+    configure({ markRead: true, forward: { to: "archive@example.com" } });
+    state.rules[0].scope = "thread";
+    await processJob(new Gmail(state.account as any), job());
+    expect(state.markRead).toHaveBeenCalledWith(["m", "older"]);
+    expect(state.forward).toHaveBeenCalledTimes(1);
+    expect(state.forward.mock.calls[0][1].id).toBe("m");
+  });
+  it("runs all actions even when one selected label is already present", async () => {
+    configure({
+      labels: [
+        { labelId: "L1", labelName: "Work" },
+        { labelId: "L2", labelName: "Finance" },
+      ],
+      replyDraft: { body: "Thanks!" },
+      markRead: true,
+      forward: { to: "archive@example.com" },
+    });
+    state.applied.set("m", ["L1"]);
+    await processJob(new Gmail(state.account as any), job());
+    expect(state.label).toHaveBeenCalledExactlyOnceWith(["m"], "L2");
+    expect(state.markRead).toHaveBeenCalledTimes(1);
+    expect(state.forward).toHaveBeenCalledTimes(1);
+    expect(state.decisions.get("m:work:1")?.actions).toHaveLength(5);
+  });
+  it("retries only failed actions while preserving partial successes", async () => {
+    configure({
+      labels: [{ labelId: "L1", labelName: "Work" }],
+      markRead: true,
+      forward: { to: "archive@example.com" },
+    });
+    state.forward.mockRejectedValueOnce(new Error("Temporary rejection"));
+    const work = job();
+    await expect(
+      processJob(new Gmail(state.account as any), work),
+    ).rejects.toThrow("Temporary rejection");
+    expect(state.decisions.get("m:work:1")?.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "forward", status: "failed" }),
+        expect.objectContaining({ type: "markRead", status: "completed" }),
+        expect.objectContaining({ type: "label", status: "completed" }),
+      ]),
+    );
+    await processJob(new Gmail(state.account as any), work);
+    expect(state.forward).toHaveBeenCalledTimes(2);
+    expect(state.label).toHaveBeenCalledTimes(1);
+    expect(state.markRead).toHaveBeenCalledTimes(1);
+    expect(state.classify).toHaveBeenCalledTimes(1);
+  });
+  it("never retries ambiguous forwarding automatically", async () => {
+    configure({ forward: { to: "archive@example.com" } });
+    state.forward.mockResolvedValue({
+      status: "unknown",
+      reason: "Response lost",
+    });
+    const work = job();
+    await processJob(new Gmail(state.account as any), work);
+    await processJob(new Gmail(state.account as any), work);
+    expect(state.forward).toHaveBeenCalledTimes(1);
+    expect(state.decisions.get("m:work:1")?.actions?.[0].status).toBe(
+      "unknown",
+    );
+  });
+  it.each(["no_match", "below_threshold", "refused"])(
+    "runs no action for %s",
+    async (kind) => {
+      configure({
+        labels: [{ labelId: "L1", labelName: "Work" }],
+        replyDraft: { body: "Thanks" },
+        markRead: true,
+        forward: { to: "archive@example.com" },
+      });
+      state.classify.mockResolvedValue(
+        new Map([
+          [
+            "work",
+            {
+              ...prediction(
+                kind === "no_match" ? "no_match" : "yes",
+                kind === "below_threshold" ? 0.6 : 0.99,
+              ),
+              refused: kind === "refused",
+            },
+          ],
+        ]),
+      );
+      await processJob(new Gmail(state.account as any), job());
+      expect(state.label).not.toHaveBeenCalled();
+      expect(state.markRead).not.toHaveBeenCalled();
+      expect(state.forward).not.toHaveBeenCalled();
+      expect(state.request.mock.calls.some((c) => c[0] === "drafts")).toBe(
+        false,
+      );
+    },
+  );
+  it("continues independent actions when a selected label was deleted", async () => {
+    configure({
+      labels: [{ labelId: "gone", labelName: "Deleted" }],
+      markRead: true,
+      forward: { to: "archive@example.com" },
+    });
+    await expect(
+      processJob(new Gmail(state.account as any), job()),
+    ).rejects.toThrow("Label unavailable");
+    expect(state.markRead).toHaveBeenCalledTimes(1);
+    expect(state.forward).toHaveBeenCalledTimes(1);
+    expect(state.decisions.get("m:work:1")?.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "label", status: "failed" }),
+        expect.objectContaining({ type: "forward", status: "completed" }),
+      ]),
+    );
+  });
+  it("blocks all configured actions for a protected conversation", async () => {
+    configure({
+      replyDraft: { body: "Thanks" },
+      markRead: true,
+      forward: { to: "archive@example.com" },
+    });
+    state.rules[0].protectedLabels = [
+      { labelId: "L1", labelName: "Work", includeChildren: false },
+    ];
+    state.applied.set("m", ["L1"]);
+    await processJob(new Gmail(state.account as any), job());
+    expect(state.classify).not.toHaveBeenCalled();
+    expect(state.markRead).not.toHaveBeenCalled();
+    expect(state.forward).not.toHaveBeenCalled();
+  });
+  it("does not relabel or mark already read messages unnecessarily", async () => {
+    configure({
+      labels: [{ labelId: "L1", labelName: "Work" }],
+      markRead: true,
+    });
+    state.thread.mockResolvedValue({
+      id: "t",
+      messages: [
+        { id: "m", threadId: "t", internalDate: "2", labelIds: ["L1"] },
+      ],
+    });
+    await processJob(new Gmail(state.account as any), job());
+    expect(state.markRead).not.toHaveBeenCalled();
+    expect(state.label).not.toHaveBeenCalled();
+    expect(
+      state.decisions
+        .get("m:work:1")
+        ?.actions?.every((action) => action.status === "completed"),
+    ).toBe(true);
+  });
+  it("resumes after an ambiguous protected-label write without blocking other actions", async () => {
+    configure({
+      labels: [
+        { labelId: "L1", labelName: "Work" },
+        { labelId: "L2", labelName: "Finance" },
+      ],
+    });
+    state.rules[0].protectedLabels = [
+      { labelId: "L1", labelName: "Work", includeChildren: false },
+    ];
+    const original = state.label.getMockImplementation()!;
+    state.label.mockImplementationOnce(async (...args: any[]) => {
+      await original(...args);
+      throw new Error("Response lost");
+    });
+    const work = job();
+    await expect(
+      processJob(new Gmail(state.account as any), work),
+    ).rejects.toThrow("Response lost");
+    expect(state.applied.get("m")).toEqual(["L1", "L2"]);
+    await processJob(new Gmail(state.account as any), work);
+    expect(work.status).toBe("complete");
+    expect(state.label).toHaveBeenCalledTimes(2);
+    expect(
+      state.decisions
+        .get("m:work:1")
+        ?.actions?.every((action) => action.status === "completed"),
+    ).toBe(true);
+  });
+  it("preserves partial action history when a rule is paused before retry", async () => {
+    configure({ markRead: true, forward: { to: "archive@example.com" } });
+    state.forward.mockRejectedValueOnce(new Error("Temporarily unavailable"));
+    const work = job();
+    await expect(
+      processJob(new Gmail(state.account as any), work),
+    ).rejects.toThrow();
+    state.active = false;
+    await processJob(new Gmail(state.account as any), work);
+    expect(state.decisions.get("m:work:1")).toMatchObject({
+      reason: "Rule paused or deleted",
+      actions: expect.arrayContaining([
+        expect.objectContaining({ type: "markRead", status: "completed" }),
+      ]),
+    });
+  });
+  it("does not let its own protected label interrupt remaining label actions", async () => {
+    configure({
+      labels: [
+        { labelId: "L1", labelName: "Work" },
+        { labelId: "L2", labelName: "Finance" },
+      ],
+    });
+    state.rules[0].protectedLabels = [
+      { labelId: "L1", labelName: "Work", includeChildren: false },
+    ];
+    await processJob(new Gmail(state.account as any), job());
+    expect(state.label).toHaveBeenCalledTimes(2);
   });
 });

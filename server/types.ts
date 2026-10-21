@@ -22,12 +22,20 @@ export interface Account {
   dataConsentVersion?: string;
   dataConsentAt?: number;
 }
+export interface ChoiceActions {
+  labels: { labelId: string; labelName: string }[];
+  replyDraft: { body: string } | null;
+  markRead: boolean;
+  forward: { to: string } | null;
+}
 export interface RuleChoice {
   id: string;
   name: string;
   description: string;
-  labelId: string;
-  labelName: string;
+  actions?: ChoiceActions;
+  /** Legacy snapshots and clients. Explicit actions take precedence. */
+  labelId?: string;
+  labelName?: string;
 }
 export interface ProtectedLabel {
   labelId: string;
@@ -78,6 +86,14 @@ export interface MessageJob {
   nextAttemptAt: number;
   lastError?: string | null;
 }
+export interface ActionResult {
+  type: "label" | "draft" | "markRead" | "forward";
+  status: "completed" | "skipped" | "unknown" | "failed";
+  labelId?: string;
+  labelName?: string;
+  to?: string;
+  reason?: string;
+}
 export interface RuleExecution {
   id: string;
   email: string;
@@ -90,6 +106,9 @@ export interface RuleExecution {
   prediction?: Classification;
   targetMessageIds?: string[];
   labelActionStarted?: boolean;
+  actionResults?: Record<string, ActionResult>;
+  /** Labels reserved before writes, so retries can distinguish their own protections. */
+  startedLabelIds?: string[];
   decision?: Decision;
   attempts: number;
   lastError?: string | null;
@@ -132,6 +151,7 @@ export interface Decision {
   choiceName?: string;
   outcome:
     | "labeled"
+    | "matched"
     | "no_match"
     | "not_recruiting"
     | "uncertain"
@@ -144,6 +164,7 @@ export interface Decision {
   labelId?: string;
   reason?: string;
   excludedLabels?: string[];
+  actions?: ActionResult[];
   draft?: "created" | "skipped" | "unknown";
   createdAt: number;
   completedAt?: number;

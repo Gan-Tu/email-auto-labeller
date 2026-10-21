@@ -1030,6 +1030,7 @@ td small {
 }
 .field input,
 .field select,
+.action-labels select,
 .field textarea {
   width: 100%;
   padding: 9px 11px;
@@ -2158,6 +2159,7 @@ td small {
   }
   .field input,
   .field select,
+  .action-labels select,
   .field textarea,
   .prompt-editor textarea {
     font-size: 16px;
@@ -2364,4 +2366,50 @@ select:not([multiple]):disabled {
     transition: none !important;
     animation: none !important;
   }
+}
+
+.match-actions {
+  border: 1px solid var(--border, #dce3ea);
+  border-radius: 10px;
+  margin: 16px 0 0;
+  padding: 12px 16px;
+  min-width: 0;
+}
+.match-actions legend {
+  font-weight: 600;
+  font-size: 13px;
+  padding: 0 5px;
+}
+.match-actions legend small {
+  font-weight: 400;
+  color: var(--muted, #64748b);
+  margin-left: 6px;
+}
+.match-actions .field {
+  margin: 8px 0 16px;
+}
+.action-labels {
+  margin: 8px 0 16px;
+}
+.action-labels select {
+  min-width: 0;
+  flex: 1;
+}
+.action-labels .inline-actions {
+  margin-bottom: 8px;
+}
+.action-result {
+  display: block;
+  max-width: 360px;
+  white-space: normal;
+  margin-top: 5px;
+  font-size: 11px;
+}
+.action-result.failed,
+.action-result.unknown {
+  color: #a65318;
+}
+.decision.matched {
+  color: #18724a;
+  background: #e9f7ef;
 }

@@ -184,6 +184,13 @@ export class Gmail {
         addLabelIds: [labelId],
       });
   }
+  async markRead(ids: string[]) {
+    for (let i = 0; i < ids.length; i += 1000)
+      await this.request("messages/batchModify", "POST", {
+        ids: ids.slice(i, i + 1000),
+        removeLabelIds: ["UNREAD"],
+      });
+  }
   async textPart(messageId: string, part: GmailPart): Promise<string[]> {
     const texts: string[] = [];
     if (part.mimeType === "text/plain" || part.mimeType === "text/html") {

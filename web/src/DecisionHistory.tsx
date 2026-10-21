@@ -141,8 +141,8 @@ export function DecisionHistory({ accounts }: { accounts: Account[] }) {
             }}
           >
             <option value="all">All results</option>
-            <option value="applied">Label applied</option>
-            <option value="not_applied">No label applied</option>
+            <option value="applied">Actions completed</option>
+            <option value="not_applied">No actions completed</option>
             <option value="no_match">No match</option>
             <option value="uncertain">Uncertain</option>
             <option value="failed">Failed</option>
@@ -251,11 +251,29 @@ export function DecisionHistory({ accounts }: { accounts: Account[] }) {
                                   d.outcome === "not_recruiting"
                                 ? "No match"
                                 : d.outcome === "decided"
-                                  ? "Label pending"
+                                  ? "Actions pending"
                                   : d.outcome === "processing"
                                     ? "Processing"
-                                    : "No label"}
+                                    : d.outcome === "matched"
+                                      ? "Matched"
+                                      : "No actions"}
                     </span>
+                    {d.actions?.map((action, index) => (
+                      <small
+                        className={`action-result ${action.status}`}
+                        key={index}
+                      >
+                        {action.type === "label"
+                          ? `Label: ${action.labelName ?? action.labelId}`
+                          : action.type === "draft"
+                            ? "Reply draft"
+                            : action.type === "markRead"
+                              ? "Mark as read"
+                              : `Forward to ${action.to}`}{" "}
+                        · {action.status}
+                        {action.reason ? ` — ${action.reason}` : ""}
+                      </small>
+                    ))}
                   </td>
                   <td className="muted">{d.email}</td>
                   <td

@@ -16,7 +16,6 @@ import {
   type GmailLabel,
   type Rule,
   type RuleInput,
-  type ReplyDraft,
   type TestResponse,
   type User,
 } from "./api";
@@ -24,7 +23,8 @@ import { Dialog } from "./Dialog";
 import { ChoiceEditor } from "./ChoiceEditor";
 import {
   cleanRule,
-  missingDraftChoiceIds,
+  actionSummary,
+  choiceActions,
   newChoice,
   validateRule,
 } from "./rules";
@@ -74,11 +74,7 @@ export function RuleEditor({
     [testResult, setTestResult] = useState<TestResponse>(),
     [testError, setTestError] = useState("");
   const testRevision = useRef(0);
-  const draftCache = useRef<ReplyDraft>(
-    form.replyDraft ?? { choiceIds: [], body: "" },
-  );
   const protectedLabels = form.protectedLabels ?? [];
-  const missingDraftChoices = missingDraftChoiceIds(form);
   useEffect(() => {
     const controller = new AbortController();
     setLabelsLoading(true);
@@ -98,15 +94,18 @@ export function RuleEditor({
   }, [email, labelReload]);
   const change = (patch: Partial<RuleInput>) => {
     testRevision.current += 1;
-    if (patch.replyDraft) draftCache.current = patch.replyDraft;
     setForm((f) => ({ ...f, ...patch }));
     setTestResult(undefined);
   };
   function validation() {
     return (
       validateRule(form) ||
-      (form.choices.some((c) => !labels.some((l) => l.id === c.labelId))
-        ? "Select an available Gmail label for every choice."
+      (form.choices.some((c) =>
+        choiceActions(c).labels.some(
+          (label) => !labels.some((l) => l.id === label.labelId),
+        ),
+      )
+        ? "Remap or remove unavailable Gmail labels."
         : "") ||
       (protectedLabels.some(
         (label) => !labels.some((existing) => existing.id === label.labelId),
@@ -201,7 +200,7 @@ export function RuleEditor({
   return (
     <Dialog
       title={rule ? "Edit rule" : "Create rule"}
-      subtitle="Describe the decision, then connect each answer to a Gmail label."
+      subtitle="Describe the decision, then choose what happens for each match."
       onClose={onClose}
       wide
       busy={busy || testBusy}
@@ -209,8 +208,8 @@ export function RuleEditor({
       <form onSubmit={save}>
         {rule?.lastError ? (
           <div className="error notice" role="alert">
-            This rule needs attention: {rule.lastError}. Check the label
-            mappings below and save to resume.
+            This rule needs attention: {rule.lastError}. Check the actions and
+            label mappings below and save to resume.
           </div>
         ) : null}
         <div className="editor-grid">
@@ -243,8 +242,13 @@ export function RuleEditor({
                       })),
                       choices: form.choices.map((c) => ({
                         ...c,
-                        labelId: "",
-                        labelName: "",
+                        actions: {
+                          ...choiceActions(c),
+                          labels: choiceActions(c).labels.map(() => ({
+                            labelId: "",
+                            labelName: "",
+                          })),
+                        },
                       })),
                     });
                   }}
@@ -342,7 +346,7 @@ export function RuleEditor({
                     <span>%</span>
                   </div>
                   <small>
-                    Lower scores are recorded as uncertain; no label is added.
+                    Lower scores are recorded as uncertain; no actions run.
                   </small>
                 </label>
                 <label className="field">
@@ -502,125 +506,6 @@ export function RuleEditor({
                   <Plus size={15} /> Add protected label
                 </button>
               </section>
-              <section
-                className="behavior-section"
-                aria-labelledby="reply-draft-title"
-              >
-                <h4 id="reply-draft-title">Reply draft</h4>
-                <label className="check-field">
-                  <input
-                    type="checkbox"
-                    checked={!!form.replyDraft}
-                    disabled={busy}
-                    onChange={(event) =>
-                      change({
-                        replyDraft: event.target.checked
-                          ? draftCache.current
-                          : null,
-                      })
-                    }
-                  />
-                  <span>
-                    <strong>Prepare a reply draft</strong>
-                    <small>
-                      Only for selected matches at or above this rule’s
-                      probability threshold. Drafts are never sent.
-                    </small>
-                  </span>
-                </label>
-                {form.replyDraft ? (
-                  <>
-                    <fieldset className="draft-choice-options">
-                      <legend>Prepare a draft for these choices</legend>
-                      {form.choices.map((choice, index) => (
-                        <label className="check-field" key={choice.id}>
-                          <input
-                            type="checkbox"
-                            checked={form.replyDraft!.choiceIds.includes(
-                              choice.id,
-                            )}
-                            disabled={busy}
-                            onChange={(event) =>
-                              change({
-                                replyDraft: {
-                                  ...form.replyDraft!,
-                                  choiceIds: event.target.checked
-                                    ? [...form.replyDraft!.choiceIds, choice.id]
-                                    : form.replyDraft!.choiceIds.filter(
-                                        (id) => id !== choice.id,
-                                      ),
-                                },
-                              })
-                            }
-                          />
-                          <span>{choice.name || `Choice ${index + 1}`}</span>
-                        </label>
-                      ))}
-                    </fieldset>
-                    {missingDraftChoices.length ? (
-                      <div className="error draft-choice-warning" role="alert">
-                        <p>
-                          A selected draft choice was removed. Update the
-                          choices below or turn off reply drafts before saving.
-                        </p>
-                        {missingDraftChoices.map((id, index) => (
-                          <div key={id}>
-                            <span>
-                              {rule?.choices.find((choice) => choice.id === id)
-                                ?.name ?? `Removed choice ${index + 1}`}
-                            </span>
-                            <button
-                              type="button"
-                              className="text-button"
-                              disabled={busy}
-                              onClick={() =>
-                                change({
-                                  replyDraft: {
-                                    ...form.replyDraft!,
-                                    choiceIds:
-                                      form.replyDraft!.choiceIds.filter(
-                                        (choiceId) => choiceId !== id,
-                                      ),
-                                  },
-                                })
-                              }
-                            >
-                              Remove from draft
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    <label className="field">
-                      Reply text
-                      <textarea
-                        required
-                        maxLength={6000}
-                        rows={6}
-                        value={form.replyDraft.body}
-                        disabled={busy}
-                        placeholder="Write the plain-text reply to prepare for these choices."
-                        onChange={(event) =>
-                          change({
-                            replyDraft: {
-                              ...form.replyDraft!,
-                              body: event.target.value,
-                            },
-                          })
-                        }
-                      />
-                      <small>
-                        {form.replyDraft.body.length.toLocaleString()} / 6,000
-                        characters · plain text
-                      </small>
-                    </label>
-                    <p className="hint">
-                      Replied conversations, existing drafts, and automated
-                      messages are skipped.
-                    </p>
-                  </>
-                ) : null}
-              </section>
             </div>
           </div>
           <aside className="test-panel">
@@ -629,8 +514,7 @@ export function RuleEditor({
               <h3>Test this rule</h3>
             </div>
             <p className="hint">
-              Uses your unsaved changes. No labels will be applied and no drafts
-              created.
+              Uses your unsaved changes. No actions run; Gmail stays unchanged.
             </p>
             <div className="segmented" aria-label="Test input type">
               <button
@@ -732,17 +616,26 @@ export function RuleEditor({
                 ) : null}
                 <p>
                   {testResult.result.refused ? (
-                    "No label would be applied."
+                    "No actions would run."
                   ) : noMatch ? (
-                    "No label would be applied."
+                    "No actions would run."
                   ) : uncertain ? (
-                    `Below the ${Math.round(form.threshold * 1000) / 10}% threshold. No label would be applied.`
-                  ) : testResult.label ? (
-                    <>
-                      Would apply <strong>{testResult.label.name}</strong>.
-                    </>
+                    `Below the ${Math.round(form.threshold * 1000) / 10}% threshold. No actions would run.`
                   ) : (
-                    "No label would be applied."
+                    <>
+                      Would run:{" "}
+                      <strong>
+                        {actionSummary({
+                          ...(form.choices.find(
+                            (c) => c.id === testResult.result.choiceId,
+                          ) ?? newChoice()),
+                          ...(testResult.actions
+                            ? { actions: testResult.actions }
+                            : {}),
+                        })}
+                      </strong>
+                      .
+                    </>
                   )}
                 </p>
                 <small>Test only · Gmail unchanged</small>

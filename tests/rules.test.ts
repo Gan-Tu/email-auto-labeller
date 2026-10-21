@@ -75,6 +75,7 @@ import {
   validateRule,
   buildRecruitingRule,
   listRulesForAccount,
+  choiceActionsSchema,
 } from "../server/rules";
 const emails = ["a@example.com", "b@example.com", "c@example.com"];
 const prompt = "Classify only personally directed employment opportunities.";
@@ -227,11 +228,7 @@ it.each([
 });
 it("prevents accidental reserved outputs and duplicate mappings", () => {
   const choice = state.docs.get(path(emails[0])).choices[0];
-  for (const choices of [
-    [{ ...choice, id: "no_match" }],
-    [choice, choice],
-    [choice, { ...choice, id: "another" }],
-  ])
+  for (const choices of [[{ ...choice, id: "no_match" }], [choice, choice]])
     expect(() =>
       editableRuleSchema.parse({ name: "Rule", prompt, choices }),
     ).toThrow();
@@ -480,4 +477,172 @@ it("leaves the original immutable legacy snapshot untouched when saving canonica
   expect(state.docs.get(versionPath)).toEqual(before);
   expect(state.docs.get(path(emails[0])).version).toBe(2);
   expect(state.docs.get(path(emails[0]))).not.toHaveProperty("draftReplies");
+});
+
+const actionChoice = (actions: unknown) => ({
+  id: "match",
+  name: "Match",
+  description: "Selected messages",
+  actions,
+});
+it("accepts all action combinations including label-free actions and shared labels", () => {
+  for (const actions of [
+    { markRead: true },
+    { replyDraft: { body: "Reply text" } },
+    { forward: { to: "destination@example.com" } },
+    { labels: [{ labelId: "L", labelName: "Label" }] },
+    {
+      markRead: true,
+      replyDraft: { body: "Reply" },
+      forward: { to: "other@example.com" },
+      labels: [
+        { labelId: "L", labelName: "Label" },
+        { labelId: "M", labelName: "More" },
+      ],
+    },
+  ]) {
+    const choice = actionChoice(actions);
+    expect(
+      editableRuleSchema.parse({
+        name: "Rule",
+        prompt,
+        choices: [choice, { ...choice, id: "other" }],
+      }).choices,
+    ).toHaveLength(2);
+  }
+});
+it("rejects empty actions, invalid recipients, duplicate labels and empty draft text", () => {
+  for (const actions of [
+    {},
+    { markRead: false, labels: [], replyDraft: null, forward: null },
+    { forward: { to: "a@example.com\r\nBcc: bad@example.com" } },
+    { forward: { to: "invalid" } },
+    { replyDraft: { body: " " } },
+    {
+      labels: [
+        { labelId: "L", labelName: "Label" },
+        { labelId: "L", labelName: "Label" },
+      ],
+    },
+  ])
+    expect(() => choiceActionsSchema.parse(actions)).toThrow();
+});
+it("explicit actions override stale legacy labels and drafts", () => {
+  const before = state.docs.get(path(emails[0]));
+  const result = validateRule(
+    {
+      ...before,
+      choices: [
+        {
+          ...before.choices[0],
+          labelId: "missing",
+          actions: {
+            labels: [],
+            replyDraft: null,
+            markRead: true,
+            forward: null,
+          },
+        },
+      ],
+    },
+    state.labels.get(emails[0])!,
+  );
+  expect(result.choices[0].actions).toEqual({
+    labels: [],
+    replyDraft: null,
+    markRead: true,
+    forward: null,
+  });
+});
+it("batch prompt edits preserve per-choice actions and immutable earlier versions", async () => {
+  const before = state.docs.get(path(emails[0]));
+  before.choices[0].actions = {
+    labels: [],
+    replyDraft: { body: "Custom reply" },
+    markRead: true,
+    forward: { to: "forward@example.com" },
+  };
+  const previous = structuredClone(before);
+  const versionPath = `accounts/${emails[0]}/ruleVersions/recruiting_v1`;
+  state.docs.set(versionPath, previous);
+  const updated = await updateRules("owner@example.com", batch());
+  expect(updated[0].choices[0].actions).toEqual(previous.choices[0].actions);
+  expect(state.docs.get(versionPath)).toEqual(previous);
+});
+it("legacy draft toggles update migrated choice actions without overriding explicit action replacements", async () => {
+  const input = batch();
+  input.changes = { replyDraft: null };
+  input.targets[0].choices = [
+    {
+      id: "recruiting",
+      name: "Recruiting",
+      description: "Hiring",
+      actions: {
+        labels: [],
+        replyDraft: { body: "Explicit reply" },
+        markRead: false,
+        forward: null,
+      },
+    },
+  ];
+  const updated = await updateRules("owner@example.com", input);
+  expect(updated[0].choices[0].actions?.replyDraft).toEqual({
+    body: "Explicit reply",
+  });
+  expect(updated[1].choices[0].actions?.replyDraft).toBeNull();
+});
+
+it("legacy draft enable still works after actions normalization", async () => {
+  const input = batch();
+  input.changes = { draftReplies: true };
+  for (const email of emails) state.docs.get(path(email)).draftReplies = false;
+  const updated = await updateRules("owner@example.com", input);
+  expect(updated[0].choices[0].actions?.replyDraft?.body).toBeTruthy();
+});
+it("legacy choice edits preserve unrepresented actions and additional labels", async () => {
+  const input = batch();
+  const before = state.docs.get(path(emails[0]));
+  before.choices[0].actions = {
+    labels: [
+      { labelId: `${emails[0]}-label`, labelName: "Old" },
+      { labelId: `${emails[0]}-protected`, labelName: "Second" },
+    ],
+    replyDraft: { body: "Custom" },
+    markRead: true,
+    forward: { to: "forward@example.com" },
+  };
+  input.targets[0].choices = [
+    {
+      ...before.choices[0],
+      actions: undefined,
+      labelId: `${emails[0]}-new`,
+      labelName: "New label",
+      name: "Renamed",
+    },
+  ];
+  const updated = await updateRules("owner@example.com", input);
+  expect(updated[0].choices[0].actions).toEqual({
+    labels: [
+      { labelId: `${emails[0]}-new`, labelName: "New label" },
+      { labelId: `${emails[0]}-protected`, labelName: "Job Search" },
+    ],
+    replyDraft: { body: "Custom" },
+    markRead: true,
+    forward: { to: "forward@example.com" },
+  });
+});
+it("explicit modern replacement actions ignore obsolete recruiting enable flags", async () => {
+  const input = batch();
+  input.changes = { draftReplies: true };
+  input.targets[0].choices = [
+    {
+      id: "different",
+      name: "Different",
+      description: "Another choice",
+      actions: { labels: [], replyDraft: null, markRead: true, forward: null },
+    },
+  ];
+  const updated = await updateRules("owner@example.com", input);
+  expect(updated[0].choices[0].actions?.replyDraft).toBeNull();
+  expect(updated[1].choices[0].actions?.replyDraft?.body).toBeTruthy();
 });

@@ -1,3 +1,4 @@
+import { actionSummary } from "./rules";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Mail,
@@ -137,7 +138,7 @@ export default function App() {
       (!inbox || rule.email === inbox) &&
       (statusFilter === "all" ||
         rule.enabled === (statusFilter === "enabled")) &&
-      `${rule.name} ${rule.email} ${rule.choices.map((c) => c.name + " " + c.labelName).join(" ")}`
+      `${rule.name} ${rule.email} ${rule.choices.map((c) => c.name + " " + actionSummary(c, rule.replyDraft)).join(" ")}`
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
@@ -245,7 +246,7 @@ export default function App() {
                 <h1>{tabs.find((t) => t.id === tab)?.label}</h1>
                 <p>
                   {tab === "rules"
-                    ? "Turn incoming emails into the right Gmail labels."
+                    ? "Turn incoming emails into the right actions."
                     : tab === "mailboxes"
                       ? "Manage connections and processing for each inbox."
                       : "See what each rule decided and what happened next."}
@@ -470,7 +471,7 @@ export default function App() {
                             />
                           </th>
                           <th>Rule / mailbox</th>
-                          <th>Choices → Gmail labels</th>
+                          <th>Choices → actions</th>
                           <th>Status</th>
                           <th>Threshold</th>
                           <th>
@@ -527,11 +528,11 @@ export default function App() {
                                       <ArrowRight size={12} />
                                       <span className="label-chip">
                                         <Tag size={11} />
-                                        {c.labelName}
+                                        {actionSummary(c, rule.replyDraft)}
                                       </span>
                                     </span>
                                   ))}
-                                  <small>+ No match · no label</small>
+                                  <small>+ No match · no actions</small>
                                 </div>
                               </td>
                               <td>
@@ -629,11 +630,11 @@ export default function App() {
                 <div className="rules-explainer">
                   <SlidersHorizontal size={18} />
                   <div>
-                    <strong>Independent rules. Specific labels.</strong>
+                    <strong>Independent rules. Flexible actions.</strong>
                     <p>
                       Each incoming email runs through its mailbox’s enabled
-                      rules. Different rules can add different labels. No match
-                      and uncertain results leave labels unchanged.
+                      rules. Each match runs its configured actions. No match
+                      and uncertain results leave Gmail unchanged.
                     </p>
                   </div>
                 </div>

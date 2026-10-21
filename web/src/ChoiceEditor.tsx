@@ -1,6 +1,7 @@
-import { Plus, Tag, Trash2, CornerDownRight } from "lucide-react";
+import { Plus, Tag, Trash2 } from "lucide-react";
 import type { GmailLabel, RuleChoice } from "./api";
-import { newChoice } from "./rules";
+import { ActionEditor } from "./ActionEditor";
+import { choiceActions, newChoice } from "./rules";
 export function ChoiceEditor({
   choices,
   onChange,
@@ -24,7 +25,8 @@ export function ChoiceEditor({
         <div>
           <h3>Multiple-choice outputs</h3>
           <p className="hint">
-            One choice is selected per email. Each choice applies one label.
+            One choice is selected per rule. Configure one or more actions for
+            each match.
           </p>
         </div>
       </div>
@@ -72,43 +74,13 @@ export function ChoiceEditor({
                 }
               />
             </label>
-            {showLabels ? (
-              <label className="field label-field">
-                <span>
-                  <CornerDownRight size={14} /> Apply Gmail label
-                </span>
-                <select
-                  required
-                  value={choice.labelId}
-                  disabled={disabled || labelsLoading}
-                  onChange={(e) =>
-                    update(choice.id, {
-                      labelId: e.target.value,
-                      labelName:
-                        labels?.find((l) => l.id === e.target.value)?.name ??
-                        "",
-                    })
-                  }
-                >
-                  <option value="">
-                    {labelsLoading
-                      ? "Loading labels…"
-                      : "Select an existing label"}
-                  </option>
-                  {choice.labelId &&
-                  !labels?.some((l) => l.id === choice.labelId) ? (
-                    <option value={choice.labelId} disabled>
-                      {choice.labelName || choice.labelId} (unavailable)
-                    </option>
-                  ) : null}
-                  {labels?.map((label) => (
-                    <option key={label.id} value={label.id}>
-                      {label.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
+            <ActionEditor
+              actions={choiceActions(choice)}
+              onChange={(actions) => update(choice.id, { actions })}
+              labels={labels}
+              showLabels={showLabels}
+              disabled={disabled || labelsLoading}
+            />
           </div>
         </div>
       ))}
@@ -127,8 +99,7 @@ export function ChoiceEditor({
             No match <span>Always included</span>
           </strong>
           <p>
-            None of the choices applies, or intent is unclear. No label is
-            added.
+            None of the choices applies, or intent is unclear. No actions run.
           </p>
         </div>
       </div>

@@ -74,15 +74,15 @@ Use the configured scheduler service account and audience. Pub/Sub retries and t
 
 ## Verify the installation
 
-Before relying on automatic labeling:
+Before relying on automatic match actions:
 
 - Confirm the expected release at `/health`, a valid domain certificate, and successful browser sign-in.
 - Confirm unauthorized API, push, and scheduler requests are rejected.
 - Read back each connected Gmail identity and confirm its labels and rule mappings.
 - Use dry-run tests to verify multiple-choice output, no match, and threshold behavior with the configured Decisions model.
-- Observe real Gmail push delivery to the deployed service. Verify a controlled positive message's actual Gmail label, an unchanged negative message, and preserved unread state. Compare them with their rule execution and activity records.
+- Observe real Gmail push delivery to the deployed service. Verify a controlled positive message's actual Gmail label, an unchanged negative message, and preserved unread state unless mark-as-read is explicitly enabled. Compare them with their rule execution and activity records.
 - Exercise several rules on one message and several choices within a rule. Verify batch edits preserve unselected fields and mailbox-specific mappings.
-- Verify catch-up and watch renewal at the mailbox level, and confirm transient failures recover without repeated classification or duplicate drafts.
+- Verify catch-up and watch renewal at the mailbox level, and confirm transient failures recover without repeated classification or duplicate drafts or forwards.
 
 The API smoke verifier requires exactly two `VERIFY_EMAILS` addresses. The live delivery verifier checks all configured allowed accounts by default; `--email` explicitly narrows that scope. The generalized rule verifier requires `--email` or `VERIFY_EMAIL`. Evidence defaults to ignored `.local/` paths. Inspect each script’s arguments before use. Some live checks insert disposable messages directly into test mailboxes and clean them up afterward; they do not send email. Keep test evidence and local operator notes outside tracked source.
 
@@ -122,4 +122,14 @@ Stage/cutover refuse to overwrite a destination that already contains processed 
 
 Inspect mailbox errors, rule errors, pending jobs, and saved predictions before changing state. Reconnect an expired authorization; repair a deleted label mapping in its rule. Do not reset cursors or delete jobs merely to clear an error.
 
-Before rollback, stop destination processing and delivery. Reconcile completed executions, cursors, and draft intents before reactivating an older worker. Running both workers against unreconciled checkpoints risks repeating actions.
+Before rollback, stop destination processing and delivery. Reconcile completed executions, cursors, and draft/forward intents before reactivating an older worker. Running both workers against unreconciled checkpoints risks repeating actions.
+
+## Per-choice action compatibility
+
+Choices support one or more of: multiple Gmail labels, a reply draft, mark-as-read, and forwarding to a custom email address. New choices start with all actions off and require at least one before saving. Drafts remain unsent; forwarding explicitly sends a readable summary and the untouched original message as `original.eml`, including its attachments. Forward only the matched incoming message even for conversation scope. No new OAuth scope is required beyond the existing `gmail.modify` grant.
+
+Old single-label mappings and selected-choice reply templates are normalized on read; editing saves per-choice actions. Preserve immutable rule-version snapshots, queued jobs, existing draft intents, and legacy execution checkpoints. Mark-as-read and forwarding remain disabled on existing rules. Explicit new actions must not fall back to old label/draft settings.
+
+Action results are checkpointed independently. `forwardIntents` account subcollections reserve each message/destination across rules, versions, and retries. Pending or unknown delivery is never automatically resent. Keep both `draftIntents` and `forwardIntents` outside completion-based TTL cleanup; include them in manual account-data deletion and rollback reconciliation. Deleting reservations while old jobs can replay can duplicate external actions.
+
+Validate draft-only, read-only, multi-label, and forwarding combinations with mocked Gmail writes. Live forwarding verification sends real email and must use an explicitly authorized controlled destination. Dry-run previews do not execute any action.

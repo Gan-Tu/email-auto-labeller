@@ -6,12 +6,12 @@ This document is an operator checklist, not evidence that Google has approved th
 
 Set `BASE_URL` to the HTTPS application origin. The app exposes these pages without requiring sign-in:
 
-| URL                   | Purpose                                                                                 |
-| --------------------- | --------------------------------------------------------------------------------------- |
-| `${BASE_URL}/about`   | Public product homepage describing rules, classification, labels, drafts, and data flow |
-| `${BASE_URL}/privacy` | Data access, storage, sharing, retention, Limited Use, and deletion requests            |
-| `${BASE_URL}/terms`   | Operational terms, authorization, and user review responsibilities                      |
-| `${BASE_URL}/support` | Connection help, private security reporting, and manual deletion requests               |
+| URL                   | Purpose                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `${BASE_URL}/about`   | Public product homepage describing rules, classification, labels, drafts, mark-as-read, forwarding, and data flow |
+| `${BASE_URL}/privacy` | Data access, storage, sharing, retention, Limited Use, and deletion requests                                      |
+| `${BASE_URL}/terms`   | Operational terms, authorization, and user review responsibilities                                                |
+| `${BASE_URL}/support` | Connection help, private security reporting, and manual deletion requests                                         |
 
 Use `/about` as the OAuth application homepage. Google requires a description of the app; a login-only page is insufficient. The homepage and OAuth consent screen must link to the same privacy URL on the app's domain. Keep these links visible inside the app as well. [Google verification requirements](https://support.google.com/cloud/answer/13464321)
 
@@ -42,12 +42,12 @@ Verify ownership of the registrable authorized domain through Google Search Cons
 
 The application requests `openid`, `email`, `profile`, and `https://www.googleapis.com/auth/gmail.modify`.
 
-| Scope                        | Implemented purpose                                                                                                                                              |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openid`, `email`, `profile` | Confirm the account identity and display its signed-in name and email.                                                                                           |
-| `gmail.modify`               | Read incoming mail and conversation context, watch changes, inspect mailbox labels, apply labels to messages, and prepare optional user-configured reply drafts. |
+| Scope                        | Implemented purpose                                                                                                                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openid`, `email`, `profile` | Confirm the account identity and display its signed-in name and email.                                                                                                                                                    |
+| `gmail.modify`               | Read incoming mail and conversation context, watch changes, inspect mailbox labels, apply labels to messages, prepare optional user-configured reply drafts, mark messages read, and send explicitly configured forwards. |
 
-`gmail.modify` is a **restricted** scope. `gmail.readonly` cannot apply labels or create drafts; `gmail.labels` manages label definitions but does not provide message-body access or authorize assigning labels to messages. `gmail.send` alone cannot support the classification and labeling workflow. The app does not request full `https://mail.google.com/` access, does not permanently delete mail, and has no automatic send action. The consent screen may describe capabilities broader than the subset the app implements; explain this truthfully. [Gmail scope reference](https://developers.google.com/workspace/gmail/api/auth/scopes)
+`gmail.modify` is a **restricted** scope. `gmail.readonly` cannot apply labels or create drafts; `gmail.labels` manages label definitions but does not provide message-body access or authorize assigning labels to messages. `gmail.send` alone cannot support the classification and labeling workflow. The app does not request full `https://mail.google.com/` access, does not permanently delete mail, and sends email only for explicitly configured forwarding actions. Draft replies remain unsent. The consent screen may describe capabilities broader than the subset the app implements; explain this truthfully. [Gmail scope reference](https://developers.google.com/workspace/gmail/api/auth/scopes)
 
 Declare the scopes actually requested by every client in the submission. If the shared legacy project serves other applications or scopes, resolve that scope and branding mismatch before presenting this app as the entire project. Do not add speculative permissions.
 
@@ -56,8 +56,9 @@ Declare the scopes actually requested by every client in the submission. If the 
 - Google Cloud hosts the app; Firestore stores connection metadata, encrypted refresh tokens, rule configuration and version snapshots, pending work, message subjects/identifiers, classification results, and action outcomes.
 - Full email bodies are processed in memory rather than stored in the app database. The OpenAI Decisions API receives mailbox identity, message identifiers, conversation headers/text, classification prompts, and choice descriptions.
 - Refresh tokens use AES-256-GCM with a per-write random nonce and mailbox identity as authenticated context. Protect the encryption key and retain it through credential migration.
-- Completed activity, jobs, and executions are scheduled to expire after 30 days. Enable the appropriate Firestore TTL policies and remember deletion is asynchronous. Pending work has no completion-based TTL. Account settings, rules/version snapshots, consent records, and draft-intent reservations need an explicit deletion process.
+- Completed activity, jobs, and executions are scheduled to expire after 30 days. Enable the appropriate Firestore TTL policies and remember deletion is asynchronous. Pending work has no completion-based TTL. Account settings, rules/version snapshots, consent records, and draft/forward-intent reservations need an explicit deletion process.
 - Sessions expire after seven days and OAuth transactions after ten minutes. Configure their database expiry policies. Confirm Cloud Logging and backup retention separately; do not claim these match application-record TTLs.
+- An explicitly enabled forwarding action transfers the matched original email and its attachments to the configured recipient through Gmail. Forward reservations persist to prevent duplicate sends; uncertain sends are not automatically retried.
 - Disconnect pauses the mailbox and erases its stored refresh credential. It does not erase every app record, revoke the Google grant, or remove Gmail labels or drafts. The public support address provides the current manual deletion-request channel.
 
 OpenAI documents no API model training by default. For Decisions, default abuse-monitoring retention is up to 30 days, with documented exceptions; encrypted prompt caching can persist for up to 24 hours. Confirm the actual API organization/project settings, keep Google-data training and data-sharing opt-ins disabled, and do not claim Zero Data Retention without an approved and verified configuration. [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data)
@@ -68,7 +69,7 @@ The published Limited Use commitment must match operations: no selling Google us
 
 1. Verify that the requester controls the mailbox or is authorized to request workspace deletion. Never request their password or OAuth token.
 2. Pause the affected mailbox, prevent new work, and wait for in-flight processing to finish under the existing mailbox lock.
-3. Identify all applicable account subcollections, rule versions, jobs, executions, activity, draft-intent records, sessions, and pending OAuth transactions. Check retained migration copies and backups too. Removing an account document alone does not delete Firestore subcollections.
+3. Identify all applicable account subcollections, rule versions, jobs, executions, activity, draft-intent and `forwardIntents` records, sessions, and pending OAuth transactions. Check retained migration copies and backups too. Removing an account document alone does not delete Firestore subcollections.
 4. Remove the agreed app records and stored credentials through a reviewed operator procedure; confirm completion and explain any specific retention exception. Do not claim this step is automated in the current UI.
 5. Explain separate Google grant revocation and Gmail cleanup. Revoking a shared OAuth application can affect other integrations. Do not revoke shared authorizations or alter Gmail contents without the user's instruction.
 
@@ -82,9 +83,9 @@ Record an unlisted demonstration video showing:
 
 1. The public homepage, privacy/support links, and pre-connection OpenAI disclosure.
 2. The complete Google authorization flow in English, correct app identity, client ID, and requested scopes.
-3. Creating a prompt with multiple choices and mapping choices to existing Gmail labels.
+3. Creating a prompt with multiple choices and configuring per-choice actions: labels, reply draft, mark-as-read, or forwarding. All start off; at least one is required before saving.
 4. Testing a rule, enabling it, receiving a synthetic message, and checking the applied label and activity entry.
-5. Independent rules, batch editing, protected labels, and an explicitly enabled draft action; show that drafts remain unsent.
+5. Independent rules, batch editing, protected labels, and an explicitly enabled draft action; show that drafts remain unsent. Show that forwarding is a separate action that sends to the configured destination, with readable text and an `original.eml` attachment preserving the original attachments.
 6. Pausing, disconnecting, and finding the deletion-request instructions.
 
 Google may require additional information and an annual independent CASA security assessment because this server-based app accesses and transfers restricted-scope data. Personal-use and internal-use exceptions have specific conditions; the operator must confirm which applies. Do not claim an exception, completed assessment, or verified status solely because the app has a privacy notice. [Restricted-scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification)

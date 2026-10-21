@@ -24,6 +24,7 @@ import {
   BusyError,
 } from "./store.js";
 import { Gmail } from "./gmail.js";
+import { normalizeChoiceActions } from "./rule-behavior.js";
 import { syncAccount, renewAccount } from "./worker.js";
 import { RECRUITING_PROMPT, classifyRules } from "./classifier.js";
 import type { Account, Message, Rule } from "./types.js";
@@ -305,14 +306,21 @@ export function createApp() {
     if (!result || result instanceof Error)
       throw result ?? new Error("Missing preview result");
     const choice = rule.choices.find((c) => c.id === result.choiceId);
+    const actions =
+      choice &&
+      !result.refused &&
+      result.probability !== null &&
+      result.probability >= rule.threshold
+        ? normalizeChoiceActions(rule, choice)
+        : null;
+    const firstLabel = actions?.labels[0];
     res.json({
       result,
-      label:
-        choice &&
-        result.probability !== null &&
-        result.probability >= rule.threshold
-          ? { id: choice.labelId, name: choice.labelName }
-          : undefined,
+      actions,
+      // Preserve the original preview field for older clients.
+      label: firstLabel
+        ? { id: firstLabel.labelId, name: firstLabel.labelName }
+        : undefined,
       applied: false,
     });
   });

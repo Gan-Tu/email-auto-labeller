@@ -22,3 +22,4 @@ secrets*.json
 *.p12
 *.pfx
 *.p8
+.playwright-mcp/

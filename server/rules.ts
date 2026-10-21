@@ -38,6 +38,41 @@ const text = (max: number) =>
       (s) => !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(s),
       "Invalid control character",
     );
+const actionLabelSchema = z
+  .object({ labelId: text(200), labelName: text(200) })
+  .strict();
+export const choiceActionsSchema = z
+  .object({
+    labels: z
+      .array(actionLabelSchema)
+      .max(50)
+      .refine(
+        (labels) =>
+          new Set(labels.map((label) => label.labelId)).size === labels.length,
+        "Action labels must be unique",
+      )
+      .default([]),
+    replyDraft: z
+      .object({ body: text(6000) })
+      .strict()
+      .nullable()
+      .default(null),
+    markRead: z.boolean().default(false),
+    forward: z
+      .object({ to: z.email().max(254) })
+      .strict()
+      .nullable()
+      .default(null),
+  })
+  .strict()
+  .refine(
+    (actions) =>
+      actions.labels.length > 0 ||
+      !!actions.replyDraft ||
+      actions.markRead ||
+      !!actions.forward,
+    "Choose at least one action for each choice",
+  );
 export const choiceSchema = z
   .object({
     id: z
@@ -46,21 +81,24 @@ export const choiceSchema = z
       .refine((id) => id !== "no_match", "No match is automatic"),
     name: text(100),
     description: text(1000),
-    labelId: text(200),
-    labelName: text(200),
+    actions: choiceActionsSchema.optional(),
+    labelId: text(200).optional(),
+    labelName: text(200).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (choice) =>
+      choice.actions !== undefined || (!!choice.labelId && !!choice.labelName),
+    "Choose at least one action for each choice",
+  );
 export const choicesSchema = z
   .array(choiceSchema)
   .min(1)
   .max(12)
   .refine(
-    (c) => new Set(c.map((x) => x.id)).size === c.length,
+    (choices) =>
+      new Set(choices.map((choice) => choice.id)).size === choices.length,
     "Choice IDs must be unique",
-  )
-  .refine(
-    (c) => new Set(c.map((x) => x.labelId)).size === c.length,
-    "Each choice needs a different label",
   );
 export const protectedLabelsSchema = z
   .array(
@@ -184,22 +222,40 @@ export function validateRule(rule: Rule, labels: Label[]): Rule {
     if (error instanceof RuleBehaviorError) throw new RuleError(error.message);
     throw error;
   }
-  if (canonical.replyDraft) {
+  if (
+    canonical.replyDraft &&
+    parsed.choices.some((choice) => choice.actions === undefined)
+  ) {
     const allowed = new Set(parsed.choices.map((choice) => choice.id));
     if (canonical.replyDraft.choiceIds.some((id) => !allowed.has(id)))
       throw new RuleError("Reply draft choices must exist in this rule");
   }
   return {
     ...canonical,
-    choices: parsed.choices.map((choice) => {
-      const label = labels.find(
-        (label) => label.id === choice.labelId && label.type !== "system",
-      );
-      if (!label)
-        throw new RuleError(
-          `The label for ${choice.name} is unavailable in this mailbox`,
+    choices: canonical.choices.map((choice) => {
+      const actions = choice.actions!;
+      const mappedLabels = actions.labels.map((mapping) => {
+        const label = labels.find(
+          (label) => label.id === mapping.labelId && label.type !== "system",
         );
-      return { ...choice, labelName: label.name };
+        if (!label)
+          throw new RuleError(
+            `The label for ${choice.name} is unavailable in this mailbox`,
+          );
+        return { labelId: label.id, labelName: label.name };
+      });
+      return {
+        ...choice,
+        ...(choice.labelId &&
+        mappedLabels.some((label) => label.labelId === choice.labelId)
+          ? {
+              labelName: mappedLabels.find(
+                (label) => label.labelId === choice.labelId,
+              )!.labelName,
+            }
+          : {}),
+        actions: { ...actions, labels: mappedLabels },
+      };
     }),
     protectedLabels: canonical.protectedLabels.map((protection) => {
       const label = labels.find(
@@ -282,15 +338,46 @@ function overlayRuleChanges(
   const next: Rule = {
     ...normalized,
     ...changes,
-    ...(target.choices !== undefined ? { choices: target.choices } : {}),
+    ...(target.choices !== undefined
+      ? {
+          choices: target.choices.map((choice) => {
+            if (choice.actions !== undefined) return choice;
+            const previous = normalized.choices.find(
+              (old) => old.id === choice.id,
+            );
+            if (!previous?.actions) return choice;
+            const labels =
+              choice.labelId && choice.labelName
+                ? [
+                    { labelId: choice.labelId, labelName: choice.labelName },
+                    ...previous.actions.labels
+                      .slice(1)
+                      .filter((label) => label.labelId !== choice.labelId),
+                  ]
+                : previous.actions.labels;
+            return { ...choice, actions: { ...previous.actions, labels } };
+          }),
+        }
+      : {}),
     ...(target.protectedLabels !== undefined
       ? { protectedLabels: target.protectedLabels }
       : {}),
   };
-  if (changes.replyDraft === undefined && changes.draftReplies !== undefined) {
+  if (
+    changes.replyDraft === undefined &&
+    changes.draftReplies !== undefined &&
+    !target.choices?.every((choice) => choice.actions !== undefined)
+  ) {
     next.replyDraft = changes.draftReplies
       ? normalizeRuleBehavior(
-          { ...next, replyDraft: undefined, draftReplies: true },
+          {
+            ...next,
+            replyDraft: undefined,
+            draftReplies: true,
+            choices: next.choices.map(
+              ({ actions: _actions, ...choice }) => choice,
+            ),
+          },
           labels,
           config.declineReplyText,
         ).replyDraft
@@ -307,6 +394,32 @@ function overlayRuleChanges(
           config.declineReplyText,
         ).protectedLabels
       : [];
+  }
+  if (
+    changes.replyDraft &&
+    changes.replyDraft.choiceIds.some(
+      (id) => !next.choices.some((choice) => choice.id === id),
+    )
+  )
+    throw new RuleError("Reply draft choices must exist in this rule");
+  if (changes.replyDraft !== undefined || changes.draftReplies !== undefined) {
+    next.choices = next.choices.map((choice) => {
+      if (
+        target.choices?.find((supplied) => supplied.id === choice.id)
+          ?.actions !== undefined
+      )
+        return choice;
+      if (!choice.actions) return choice;
+      return {
+        ...choice,
+        actions: {
+          ...choice.actions,
+          replyDraft: next.replyDraft?.choiceIds.includes(choice.id)
+            ? { body: next.replyDraft.body }
+            : null,
+        },
+      };
+    });
   }
   return next;
 }

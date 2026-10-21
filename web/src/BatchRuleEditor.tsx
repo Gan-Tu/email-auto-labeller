@@ -5,16 +5,19 @@ import {
   post,
   mailboxPath,
   type GmailLabel,
+  type ChoiceActions,
   type Rule,
   type RuleChoice,
   type User,
 } from "./api";
 import { Dialog } from "./Dialog";
 import { sortLabels } from "./labels";
+import { ActionEditor } from "./ActionEditor";
 import { ChoiceEditor } from "./ChoiceEditor";
 import {
-  matchingLabel,
-  missingDraftChoiceIds,
+  choiceActions,
+  actionSummary,
+  batchChoiceActions,
   newChoice,
   ruleKey,
   validateRule,
@@ -44,21 +47,17 @@ export function BatchRuleEditor({
     [enabled, setEnabled] = useState(true);
   const [source, setSource] = useState(""),
     [labels, setLabels] = useState<Record<string, GmailLabel[]>>({}),
-    [mappings, setMappings] = useState<Record<string, Record<string, string>>>(
-      {},
-    );
+    [mappings, setMappings] = useState<
+      Record<string, Record<string, ChoiceActions>>
+    >({});
   const [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [overwritePrompts, setOverwritePrompts] = useState(false),
-    [disableDrafts, setDisableDrafts] = useState(false),
+    [replaceActions, setReplaceActions] = useState(false),
     [labelReload, setLabelReload] = useState(0);
   const heading = useRef<HTMLHeadingElement>(null);
   const emails = [...new Set(rules.map((r) => r.email))];
-  const affectedDraftRules = fields.choices
-    ? rules.filter((rule) => missingDraftChoiceIds(rule, choices).length > 0)
-    : [];
-  const incompatibleDrafts = affectedDraftRules.length > 0;
   const promptVariants = new Set(rules.map((r) => r.prompt)).size;
   useEffect(() => {
     if (step > 0) heading.current?.focus();
@@ -92,46 +91,44 @@ export function BatchRuleEditor({
     const rule = rules.find((r) => ruleKey(r) === key);
     if (!rule) return;
     setPrompt(rule.prompt);
-    setChoices(rule.choices.map((c) => ({ ...c })));
+    setChoices(
+      rule.choices.map((c) => ({
+        ...c,
+        actions: choiceActions(c, rule.replyDraft),
+      })),
+    );
     setThreshold(rule.threshold);
     setEnabled(rule.enabled);
-    setMappings(
-      Object.fromEntries(
-        rules.map((target) => [
-          ruleKey(target),
-          Object.fromEntries(
-            rule.choices.map((choice) => [
-              choice.id,
-              matchingLabel(target, choice),
-            ]),
-          ),
-        ]),
-      ),
+    setMappings({});
+  }
+  function assigned(rule: Rule, choice: RuleChoice): ChoiceActions {
+    return (
+      mappings[ruleKey(rule)]?.[choice.id] ??
+      batchChoiceActions(rule, choice, labels[rule.email] ?? [], replaceActions)
     );
   }
-  function assigned(rule: Rule, choice: RuleChoice) {
-    return mappings[ruleKey(rule)]?.[choice.id] ?? matchingLabel(rule, choice);
-  }
+
   function targetChoices(rule: Rule) {
-    return choices.map((c) => {
-      const labelId = assigned(rule, c);
-      const label = labels[rule.email]?.find((l) => l.id === labelId);
-      return {
-        ...c,
-        name: c.name.trim(),
-        description: c.description.trim(),
-        labelId,
-        labelName: label?.name ?? "",
-      };
-    });
+    return choices.map((c) => ({
+      id: c.id,
+      name: c.name.trim(),
+      description: c.description.trim(),
+      actions: assigned(rule, c),
+    }));
   }
   const missingLabels = fields.choices
     ? rules.reduce(
         (sum, rule) =>
           sum +
-          choices.filter(
-            (c) => !labels[rule.email]?.some((l) => l.id === assigned(rule, c)),
-          ).length,
+          choices.reduce(
+            (count, choice) =>
+              count +
+              assigned(rule, choice).labels.filter(
+                (label) =>
+                  !labels[rule.email]?.some((l) => l.id === label.labelId),
+              ).length,
+            0,
+          ),
         0,
       )
     : 0;
@@ -144,8 +141,6 @@ export function BatchRuleEditor({
       return "Confirm that the different prompts will be replaced.";
     if (fields.threshold && (threshold < 0.5 || threshold > 0.999))
       return "Choose a threshold between 50 and 99.9%.";
-    if (incompatibleDrafts && !disableDrafts)
-      return "The replacement removes choices used by reply drafts. Turn off reply drafts or keep those choice IDs.";
     if (fields.choices) {
       if (!choices.length || choices.length > 12)
         return "Add between 1 and 12 choices.";
@@ -167,9 +162,7 @@ export function BatchRuleEditor({
         for (const rule of rules) {
           const failure = validateRule({
             ...rule,
-            ...(incompatibleDrafts && disableDrafts
-              ? { replyDraft: null }
-              : {}),
+            replyDraft: null,
             choices: targetChoices(rule),
           });
           if (failure) {
@@ -192,7 +185,7 @@ export function BatchRuleEditor({
       ...(fields.prompt ? { prompt: prompt.trim() } : {}),
       ...(fields.threshold ? { threshold } : {}),
       ...(fields.enabled ? { enabled } : {}),
-      ...(incompatibleDrafts && disableDrafts ? { replyDraft: null } : {}),
+      ...(fields.choices ? { replyDraft: null } : {}),
     };
     const targets = rules.map((rule) => ({
       email: rule.email,
@@ -221,7 +214,7 @@ export function BatchRuleEditor({
       busy={busy}
     >
       <nav className="batch-steps" aria-label="Batch edit steps">
-        {["Choose changes", "Map labels", "Review"].map((label, i) => (
+        {["Choose changes", "Review actions", "Review"].map((label, i) => (
           <span
             key={label}
             className={step === i ? "current" : step > i ? "done" : ""}
@@ -236,7 +229,7 @@ export function BatchRuleEditor({
         {step === 0
           ? "Replace only the fields you choose"
           : step === 1
-            ? "Map each choice to a label in each inbox"
+            ? "Review actions for each mailbox"
             : "Review your changes"}
       </h3>
       {step === 0 ? (
@@ -345,33 +338,34 @@ export function BatchRuleEditor({
                 </p>
                 <ChoiceEditor
                   choices={choices}
-                  onChange={setChoices}
+                  onChange={(value) => {
+                    setChoices(value);
+                    setMappings({});
+                  }}
                   showLabels={false}
                 />
-                {incompatibleDrafts ? (
-                  <label className="check-field">
-                    <input
-                      type="checkbox"
-                      checked={disableDrafts}
-                      onChange={(e) => setDisableDrafts(e.target.checked)}
-                    />
-                    <span>
-                      Turn off reply drafts for all selected rules.
-                      <small>
-                        The replacement removes draft choices in{" "}
-                        {affectedDraftRules.length}{" "}
-                        {affectedDraftRules.length === 1 ? "rule" : "rules"}.
-                        Confirming disables drafts for every selected rule.
-                        Protected labels stay unchanged.
-                      </small>
-                    </span>
-                  </label>
-                ) : null}
+                <label className="check-field">
+                  <input
+                    type="checkbox"
+                    checked={replaceActions}
+                    onChange={(e) => {
+                      setReplaceActions(e.target.checked);
+                      setMappings({});
+                    }}
+                  />
+                  <span>
+                    Replace existing actions with the actions above
+                    <small>
+                      By default, preserve each matching choice’s actions by ID
+                      or name. New choices use the actions above. Review every
+                      mailbox next.
+                    </small>
+                  </span>
+                </label>
               </>
             ) : (
               <p className="hint">
-                Choice names, descriptions, and mailbox label mappings are
-                preserved.
+                Choice names, descriptions, and all actions are preserved.
               </p>
             )}
           </fieldset>
@@ -452,8 +446,9 @@ export function BatchRuleEditor({
       ) : step === 1 ? (
         <div className="batch-mappings">
           <p className="hint">
-            Every dropdown contains labels from that mailbox only. Existing
-            choice mappings are preselected when available.
+            Review each choice’s actions before saving. Label options belong to
+            that mailbox only. Existing actions are preserved unless you replace
+            them.
           </p>
           {loading ? (
             <p role="status">Loading Gmail labels…</p>
@@ -465,41 +460,23 @@ export function BatchRuleEditor({
                   <span>{rule.email}</span>
                 </div>
                 {choices.map((choice) => (
-                  <label key={choice.id} className="mapping-row">
-                    <span>
-                      <Tag size={14} />
-                      {choice.name}
-                    </span>
-                    <select
-                      aria-label={`${choice.name} label for ${rule.name} (${rule.email})`}
-                      value={assigned(rule, choice)}
-                      onChange={(e) =>
+                  <section key={choice.id}>
+                    <h4>{choice.name}</h4>
+                    <ActionEditor
+                      actions={assigned(rule, choice)}
+                      labels={labels[rule.email]}
+                      onChange={(actions) =>
                         setMappings((prev) => ({
                           ...prev,
                           [ruleKey(rule)]: {
                             ...prev[ruleKey(rule)],
-                            [choice.id]: e.target.value,
+                            [choice.id]: actions,
                           },
                         }))
                       }
-                    >
-                      <option value="">Select a Gmail label</option>
-                      {labels[rule.email]?.map((label) => (
-                        <option value={label.id} key={label.id}>
-                          {label.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    />
+                  </section>
                 ))}
-                {missingDraftChoiceIds(rule, choices).length > 0 &&
-                !disableDrafts ? (
-                  <p className="error">
-                    This replacement removes choices used by the reply draft. Go
-                    back and confirm that reply drafts will be turned off, or
-                    retain those choices.
-                  </p>
-                ) : null}
               </section>
             ))
           )}
@@ -527,16 +504,16 @@ export function BatchRuleEditor({
                     ([key]) =>
                       ({
                         prompt: "Prompt",
-                        choices: "Choices and labels",
+                        choices: "Choices and actions",
                         threshold: "Threshold",
                         enabled: "Status",
                       })[key as Field],
                   )
                   .join(", ")}{" "}
                 will be replaced.
-                {incompatibleDrafts && disableDrafts
-                  ? " Reply drafts will be turned off for all selected rules."
-                  : " Existing reply drafts are preserved."}{" "}
+                {fields.choices
+                  ? " Actions are configured per choice and mailbox."
+                  : " Existing actions are preserved."}{" "}
                 Protected labels are preserved.
               </p>
             </div>
@@ -570,9 +547,9 @@ export function BatchRuleEditor({
               {fields.choices ? (
                 <>
                   <p className="hint">
-                    {rule.choices.length} current labeled{" "}
+                    {rule.choices.length} current{" "}
                     {rule.choices.length === 1 ? "choice" : "choices"} →{" "}
-                    {choices.length} new labeled{" "}
+                    {choices.length} new{" "}
                     {choices.length === 1 ? "choice" : "choices"}
                   </p>
                   {targetChoices(rule).map((choice) => (
@@ -581,11 +558,11 @@ export function BatchRuleEditor({
                       <ArrowRight size={13} />
                       <span className="label-chip">
                         <Tag size={12} />
-                        {choice.labelName}
+                        {actionSummary(choice)}
                       </span>
                     </div>
                   ))}
-                  <small>No match → no label, always included</small>
+                  <small>No match → no actions, always included</small>
                 </>
               ) : null}
               {fields.threshold ? (
@@ -593,9 +570,6 @@ export function BatchRuleEditor({
                   Threshold: {(rule.threshold * 100).toFixed(1)}% →{" "}
                   {(threshold * 100).toFixed(1)}%
                 </p>
-              ) : null}
-              {incompatibleDrafts && disableDrafts && rule.replyDraft ? (
-                <p>Reply drafts: enabled → disabled</p>
               ) : null}
               {fields.enabled ? (
                 <p>
@@ -652,7 +626,7 @@ export function BatchRuleEditor({
             disabled={loading}
             onClick={next}
           >
-            {step === 0 && fields.choices ? "Map labels" : "Review changes"}
+            {step === 0 && fields.choices ? "Review actions" : "Review changes"}
             <ArrowRight size={15} />
           </button>
         ) : (

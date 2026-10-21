@@ -1,6 +1,7 @@
 import { Gmail, GmailError, GmailContentError, header } from "./gmail.js";
 import { classifyRules, NO_MATCH } from "./classifier.js";
 import { config } from "./config.js";
+import { forwardMessage } from "./forward.js";
 import { normalizeRuleBehavior } from "./rule-behavior.js";
 import {
   accountRef,
@@ -21,6 +22,7 @@ import {
 } from "./store.js";
 import type {
   Decision,
+  ActionResult,
   Label,
   Message,
   Thread,
@@ -107,7 +109,12 @@ async function createReplyDraft(
       createdAt: Date.now(),
     });
   } catch (error: any) {
-    if (error.code === 6) return "skipped";
+    if (error.code === 6) {
+      const previous = (await intent.get()).data();
+      return previous?.status === "pending" || previous?.status === "unknown"
+        ? "unknown"
+        : "skipped";
+    }
     throw error;
   }
   const subject = header(latest, "subject").replace(/[\r\n]/g, " ");
@@ -150,6 +157,9 @@ function decisionFor(execution: RuleExecution): Decision {
     ruleVersion: execution.rule.version,
     createdAt: execution.createdAt,
     outcome: "skipped",
+    ...(execution.actionResults
+      ? { actions: Object.values(execution.actionResults) }
+      : {}),
   };
 }
 const reasonFor = (error: unknown) =>
@@ -181,6 +191,7 @@ async function failExecution(execution: RuleExecution, error: unknown) {
   await saveDecision({
     ...decisionFor(execution),
     outcome: "failed",
+    actions: Object.values(execution.actionResults ?? {}),
     reason: execution.lastError,
   });
 }
@@ -277,6 +288,16 @@ async function applyPrediction(
   );
   if (!choice)
     throw new Error("Selected choice is no longer in the rule snapshot");
+  if (choice.actions) {
+    await applyChoiceActions(
+      gmail,
+      execution,
+      labels,
+      decision,
+      choice.actions,
+    );
+    return;
+  }
   const target = labels.find(
     (l) => l.id === choice.labelId && l.type !== "system",
   );
@@ -330,6 +351,192 @@ async function applyPrediction(
     choice.id,
     execution.targetMessageIds ?? [],
   );
+  await completeExecution(execution, decision);
+}
+/** Each completed action is checkpointed independently. Safe Gmail mutations may retry;
+ * draft and forward writes also have durable reservations for ambiguous responses. */
+async function applyChoiceActions(
+  gmail: Gmail,
+  execution: RuleExecution,
+  labels: Label[],
+  decision: Decision,
+  actions: NonNullable<Rule["choices"][number]["actions"]>,
+) {
+  if (await failMissingProtection(execution, labels)) return;
+  const results = { ...execution.actionResults };
+  const errors: string[] = [];
+  const intendedIds = new Set(execution.targetMessageIds ?? []);
+  const run = async (
+    key: string,
+    details: Omit<ActionResult, "status">,
+    action: (
+      thread: Thread,
+      eligible: Message[],
+    ) => Promise<Partial<ActionResult>>,
+  ) => {
+    if (results[key] && results[key].status !== "failed") return;
+    let result: ActionResult;
+    try {
+      // Protections and eligibility are checked anew before every independent action.
+      const current = await gmail.thread(execution.threadId);
+      const eligible = current.messages.filter(
+        (m) => intendedIds.has(m.id) && isIncoming(m),
+      );
+      if (!(await ruleIsActive(execution.email, execution.rule.id)))
+        result = {
+          ...details,
+          status: "skipped",
+          reason: "Rule paused or deleted",
+        };
+      else if (
+        ruleProtectsThread(
+          execution.rule,
+          {
+            ...current,
+            messages: current.messages.map((message) => ({
+              ...message,
+              labelIds: message.labelIds?.filter(
+                (id) =>
+                  !(
+                    intendedIds.has(message.id) &&
+                    (results[`label:${id}`]?.status === "completed" ||
+                      execution.startedLabelIds?.includes(id))
+                  ),
+              ),
+            })),
+          },
+          labels,
+        )
+      )
+        result = { ...details, status: "skipped", reason: "Protected label" };
+      else if (!eligible.length)
+        result = {
+          ...details,
+          status: "skipped",
+          reason: "No incoming messages remain",
+        };
+      else
+        result = {
+          ...details,
+          status: "completed",
+          ...(await action(current, eligible)),
+        };
+    } catch (error) {
+      result = { ...details, status: "failed", reason: reasonFor(error) };
+      errors.push(result.reason!);
+    }
+    results[key] = result;
+    const next = { ...execution, actionResults: { ...results } };
+    // Do not proceed to another external write if its predecessor's checkpoint failed.
+    await saveExecution(next);
+    Object.assign(execution, next);
+  };
+  // Draft before labels/read so a rule's own protected label cannot suppress its other actions.
+  if (actions.replyDraft)
+    await run("draft", { type: "draft" }, async (thread) => {
+      const result = await createReplyDraft(
+        gmail,
+        thread,
+        { choiceIds: [decision.choiceId!], body: actions.replyDraft!.body },
+        decision.choiceId!,
+        execution.targetMessageIds ?? [],
+      );
+      return {
+        status: result === "created" ? "completed" : (result ?? "skipped"),
+      };
+    });
+  if (actions.forward)
+    await run(
+      "forward",
+      { type: "forward", to: actions.forward.to },
+      async (_thread, eligible) => {
+        const incoming = eligible.find((m) => m.id === execution.messageId);
+        if (!incoming)
+          return {
+            status: "skipped",
+            reason: "Matched incoming message is no longer eligible",
+          };
+        const result = await forwardMessage(
+          gmail,
+          incoming,
+          actions.forward!.to,
+        );
+        return {
+          status: result.status === "sent" ? "completed" : result.status,
+          ...(result.reason ? { reason: result.reason } : {}),
+        };
+      },
+    );
+  if (actions.markRead)
+    await run("markRead", { type: "markRead" }, async (_thread, eligible) => {
+      const ids = eligible
+        .filter((m) => m.labelIds?.includes("UNREAD"))
+        .map((m) => m.id);
+      if (ids.length) await gmail.markRead(ids);
+      return {};
+    });
+  for (const label of actions.labels)
+    await run(
+      `label:${label.labelId}`,
+      { type: "label", labelId: label.labelId, labelName: label.labelName },
+      async (_thread, eligible) => {
+        const target = labels.find(
+          (l) => l.id === label.labelId && l.type !== "system",
+        );
+        if (!target)
+          throw new Error(
+            `Label unavailable: ${label.labelName}. Update the rule mapping.`,
+          );
+        const ids = eligible
+          .filter((m) => !m.labelIds?.includes(target.id))
+          .map((m) => m.id);
+        if (ids.length) {
+          const reserved = {
+            ...execution,
+            startedLabelIds: [
+              ...new Set([...(execution.startedLabelIds ?? []), target.id]),
+            ],
+          };
+          await saveExecution(reserved);
+          Object.assign(execution, reserved);
+          await gmail.label(ids, target.id);
+        }
+        return { labelName: target.name };
+      },
+    );
+  decision.actions = Object.values(results);
+  const draftResult = results.draft;
+  if (draftResult && draftResult.status !== "failed")
+    decision.draft =
+      draftResult.status === "completed" ? "created" : draftResult.status;
+  if (errors.length) {
+    await recordRuleError(execution.rule, errors.join("; ").slice(0, 180));
+    throw new Error(errors.join("; ").slice(0, 180));
+  }
+  const completed = decision.actions.some(
+    (action) => action.status === "completed",
+  );
+  const uncertain = decision.actions.some(
+    (action) => action.status === "unknown",
+  );
+  decision.outcome =
+    completed || uncertain
+      ? decision.actions.some(
+          (action) => action.type === "label" && action.status === "completed",
+        )
+        ? "labeled"
+        : "matched"
+      : "skipped";
+  if (uncertain)
+    decision.reason =
+      "An action's delivery is unconfirmed; it will not be repeated automatically.";
+  const firstLabel = decision.actions.find(
+    (action) => action.type === "label" && action.status === "completed",
+  );
+  if (firstLabel) {
+    decision.label = firstLabel.labelName;
+    decision.labelId = firstLabel.labelId;
+  }
   await completeExecution(execution, decision);
 }
 export async function processJob(

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   needsLegacyBehavior,
+  normalizeChoiceActions,
   normalizeRuleBehavior,
   RuleBehaviorError,
 } from "../server/rule-behavior";
@@ -112,4 +113,49 @@ describe("Legacy behavior conversion", () => {
       normalizeRuleBehavior(before, [], "private body").protectedLabels,
     ).toEqual(before.protectedLabels);
   });
+});
+
+it("migrates labels and choice-specific drafts without enabling new actions", () => {
+  const old = legacy();
+  const converted = normalizeRuleBehavior(old, labels, "Legacy reply");
+  expect(converted.choices[0].actions).toEqual({
+    labels: [{ labelId: "root", labelName: "Job Search" }],
+    replyDraft: { body: "Legacy reply" },
+    markRead: false,
+    forward: null,
+  });
+  expect(old.choices[0]).not.toHaveProperty("actions");
+});
+it("explicit empty actions never resurrect old actions during normalization", () => {
+  const old = legacy();
+  const actions = {
+    labels: [],
+    replyDraft: null,
+    markRead: false,
+    forward: null,
+  };
+  old.choices[0].actions = actions;
+  expect(
+    normalizeRuleBehavior(old, labels, "Legacy reply").choices[0].actions,
+  ).toEqual(actions);
+  const result = normalizeChoiceActions(old, old.choices[0]);
+  expect(result).toEqual(actions);
+  expect(result).not.toBe(actions);
+});
+
+it("ignores obsolete recruiting draft flags once every choice has explicit actions", () => {
+  const old = legacy();
+  old.protectedLabels = [];
+  old.choices = [
+    {
+      id: "new",
+      name: "New",
+      description: "New choice",
+      actions: { labels: [], replyDraft: null, markRead: true, forward: null },
+    },
+  ];
+  expect(needsLegacyBehavior(old)).toBe(false);
+  expect(
+    normalizeRuleBehavior(old, [], "").choices[0].actions?.replyDraft,
+  ).toBeNull();
 });

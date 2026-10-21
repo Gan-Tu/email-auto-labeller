@@ -138,7 +138,7 @@ it.each(origins)(
       "Only label invitations to staff engineering roles.",
     );
     expect(state.account).not.toHaveProperty("openaiRouting");
-    expect(state.account.dataConsentVersion).toBe("2026-10-18");
+    expect(state.account.dataConsentVersion).toBe("2026-10-21");
     expect(state.account.dataConsentAt).toBeGreaterThan(0);
     expect(
       [...state.docs.keys()].filter((k) => k.startsWith("oauth/")),

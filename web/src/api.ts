@@ -19,12 +19,19 @@ export interface GmailLabel {
   name: string;
   type?: string;
 }
+export interface ChoiceActions {
+  labels: { labelId: string; labelName: string }[];
+  replyDraft: { body: string } | null;
+  markRead: boolean;
+  forward: { to: string } | null;
+}
 export interface RuleChoice {
   id: string;
   name: string;
   description: string;
-  labelId: string;
-  labelName: string;
+  labelId?: string;
+  labelName?: string;
+  actions?: ChoiceActions;
 }
 export interface ProtectedLabel {
   labelId: string;
@@ -62,6 +69,7 @@ export interface TestResponse {
     refused?: boolean;
   };
   label?: { id: string; name: string };
+  actions?: ChoiceActions | null;
   applied: false;
 }
 export interface Decision {
@@ -82,6 +90,14 @@ export interface Decision {
   reason?: string;
   excludedLabels?: string[];
   draft?: string;
+  actions?: {
+    type: "label" | "draft" | "markRead" | "forward";
+    status: "completed" | "skipped" | "unknown" | "failed";
+    labelId?: string;
+    labelName?: string;
+    to?: string;
+    reason?: string;
+  }[];
   createdAt: number;
   completedAt?: number;
 }

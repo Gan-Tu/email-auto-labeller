@@ -1,8 +1,8 @@
 # Email Auto Labeller
 
-Classify incoming Gmail messages with your own prompts and apply the right labels automatically.
+Classify incoming Gmail messages with your own prompts and run the actions you choose automatically.
 
-Each mailbox has independent rules. A rule combines a classification prompt with multiple-choice answers, and each answer maps to an existing Gmail label. For example:
+Each mailbox has independent rules. A rule combines a classification prompt with multiple-choice answers, and each answer has its own match actions. For example:
 
 | Choice     | When to select it                                            | Gmail label       |
 | ---------- | ------------------------------------------------------------ | ----------------- |
@@ -12,15 +12,15 @@ Each mailbox has independent rules. A rule combines a classification prompt with
 
 ## Features
 
-- **Mailbox-specific rules:** up to 20 rules per mailbox and 12 labeled choices per rule. No match is always included.
-- **Structured editor:** write a prompt, describe each answer, and select labels from the connected mailbox. Labels are stored by ID, so renaming a label preserves its mapping.
+- **Mailbox-specific rules:** up to 20 rules per mailbox and 12 choices per rule. No match is always included.
+- **Structured editor:** write a prompt, describe each answer, and choose one or more actions: add Gmail labels, create a reply draft, mark as read, or forward to an email address. Labels are stored by ID, so renaming a label preserves its mapping.
 - **Batch editing:** update prompts, choices, thresholds, or enabled states across selected rules and inboxes. Keep/Replace controls preserve unselected fields; per-mailbox label mapping and a review step precede an atomic update.
 - **Rule behavior:** protect conversations by existing labels, including optional nested labels, and prepare editable reply drafts for selected choices.
 - **Dry-run tests:** classify pasted email text or an existing Gmail message using unsaved settings, without changing Gmail.
-- **Activity history:** inspect each rule's answer, selected probability, applied label, uncertainty, and errors.
+- **Activity history:** inspect each rule's answer, selected probability, each action’s result, uncertainty, and errors.
 - **Reliable processing:** durable message jobs, versioned rule snapshots, saved predictions, and retryable Gmail actions.
 
-Multiple rules can add different labels to one message. Each rule selects at most one label. No match and low-probability results leave labels unchanged. The app does not mark messages read or send email.
+Each enabled rule independently selects at most one choice. A choice can add multiple labels and combine any of the four actions. All actions start off: no labels, no draft, no forwarding, and unchanged read status. Saving requires at least one action per choice; the automatic No match choice has no actions. No match, refusal, and low-probability results leave Gmail unchanged. Drafts stay unsent; an explicitly configured forwarding action sends an email to its destination.
 
 ## Quick start
 
@@ -57,12 +57,12 @@ Use `BASE_URL=http://localhost:5173` for the Vite frontend and register the matc
 ```text
 Gmail notification → authenticated Pub/Sub push → Gmail history
   → durable message jobs → Decisions API choice questions
-  → saved predictions → Gmail labels → per-rule activity
+  → saved predictions → configured match actions → per-rule activity
 ```
 
-Each enabled rule becomes an independent named `choice` question in the OpenAI Decisions API. Rules share the conversation context in one request. The selected choice's **probability** is compared with the rule's threshold; the API's separate **confidence** value is recorded separately. A refusal applies no label.
+Each enabled rule becomes an independent named `choice` question in the OpenAI Decisions API. Rules share the conversation context in one request. The selected choice's **probability** is compared with the rule's threshold; the API's separate **confidence** value is recorded separately. A refusal runs no actions.
 
-New rules default to labeling the incoming message, with the conversation used as context. Conversation scope can label eligible incoming messages in the thread. Sent mail, drafts, spam, and trash are excluded; automatically archived incoming messages remain eligible. Email content is treated as data, never as instructions to the classifier.
+New rules default to incoming-message scope, with the conversation used as context. Conversation scope can label or mark read eligible incoming messages in the thread. Forwarding sends only the matched incoming message, regardless of context scope. Sent mail, drafts, spam, and trash are excluded; automatically archived incoming messages remain eligible. Email content is treated as data, never as instructions to the classifier.
 
 Jobs are stored before the Gmail history cursor advances. Rule versions are captured when work is queued, and predictions are stored before Gmail writes. Duplicate notifications reuse existing work; transient failures retry. Deleted labels surface as rule errors instead of silently choosing another label.
 
@@ -74,9 +74,11 @@ This is a self-hosted, allowlisted workspace. Configure `OWNER_EMAIL` and `ALLOW
 
 Refresh tokens are encrypted with AES-256-GCM. Email bodies are processed in memory and sent to OpenAI for classification. Activity stores subjects and decision metadata with expiration timestamps; configure Firestore TTL policies as described in the deployment guide. The UI displays the latest 500 records in pages of 25.
 
-Every rule can protect up to 50 existing labels, optionally including nested labels. If any selected label is present, the entire conversation is skipped. An optional reply draft supports one or more of the rule’s choices and editable plain text of up to 6,000 characters. Drafts are prepared only for selected matches at or above the threshold; replied conversations, existing drafts, and automated messages are skipped. Drafts are never sent.
+Every rule can protect up to 50 existing labels, optionally including nested labels. If any selected label is present, the entire conversation is skipped. Each choice can optionally create a reply draft with editable plain text of up to 6,000 characters. Drafts are prepared only for selected matches at or above the threshold; replied conversations, existing drafts, and automated messages are skipped. Drafts are never sent.
 
-Removing a choice used by a draft requires an explicit adjustment or disabling the draft. Batch updates preserve existing protections and draft bodies unless disabling drafts is explicitly confirmed. `DECLINE_REPLY_TEXT` is used only when converting older recruiting draft settings into the per-rule body; new draft text is configured in the rule editor.
+Forwarding sends a readable plain-text summary with an untouched `original.eml` attachment containing the original message and attachments. Self-directed, original-sender, and previously forwarded messages are skipped to prevent loops. A durable reservation for each mailbox/message/destination prevents duplicate forwards across rules and retries; uncertain delivery is reported and never resent automatically. Each action has a separate result and checkpoint so failures do not hide other actions’ successes.
+
+Existing single-label choices and rule-level draft settings are normalized into per-choice actions when read and saved in the new format when edited. Existing mark-read and forwarding settings remain off. Historical versions and queued snapshots remain immutable and retain their legacy execution behavior. Explicit new action settings override legacy values. Batch edits preserve actions unless choices are replaced, with separate label mapping for each mailbox. `DECLINE_REPLY_TEXT` remains the fallback only for older recruiting draft settings.
 
 See [OAuth verification readiness](docs/oauth-verification.md) for public disclosure pages, consent-screen configuration, and the verification process.
 

@@ -93,6 +93,21 @@ describe("Public OAuth information", () => {
     expect(terms.text).toContain("does not send that draft automatically");
   });
 
+  it("discloses explicit forwarding, mark-read, and retained forwarding reservations", async () => {
+    const about = await request(app).get("/about");
+    expect(about.text).toContain(
+      "All actions start off; each choice requires at least one",
+    );
+    expect(about.text).toContain("mark incoming messages read");
+    expect(about.text).toContain("original.eml");
+    const privacy = await request(app).get("/privacy");
+    expect(privacy.text).toContain("forwarding destinations");
+    expect(privacy.text).toContain("draft/forward-intent records");
+    const terms = await request(app).get("/terms");
+    expect(terms.text).toContain("forwarding action sends automatically");
+    expect(terms.text).toContain("does not send that draft automatically");
+  });
+
   it("uses configurable support details and escapes operator/title markup", async () => {
     process.env.SUPPORT_EMAIL = "support@example.com";
     process.env.OPERATOR_NAME = '<img src=x onerror="alert(1)">';
