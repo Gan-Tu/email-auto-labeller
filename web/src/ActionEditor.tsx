@@ -55,7 +55,11 @@ export function ActionEditor({
                     })
                   }
                 >
-                  <option value="">Select an existing label</option>
+                  <option value="">
+                    {!selected.labelId && selected.labelName
+                      ? `Select a label for ${selected.labelName}`
+                      : "Select an existing label"}
+                  </option>
                   {selected.labelId &&
                     !labels.some((l) => l.id === selected.labelId) && (
                       <option value={selected.labelId}>

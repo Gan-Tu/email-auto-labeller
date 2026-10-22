@@ -13,7 +13,10 @@ export function newChoice(): RuleChoice {
     actions: emptyActions(),
   };
 }
-export function validateRule(rule: RuleInput) {
+export function validateRule(
+  rule: RuleInput,
+  options: { template?: boolean } = {},
+) {
   if (!rule.name.trim()) return "Give this rule a name.";
   if (rule.prompt.trim().length < 20 || rule.prompt.length > 6000)
     return "Use between 20 and 6,000 characters for the classification prompt.";
@@ -24,6 +27,7 @@ export function validateRule(rule: RuleInput) {
       return "Each choice needs a name and description.";
     const actions = choiceActions(choice, rule.replyDraft);
     if (
+      !options.template &&
       !actions.labels.length &&
       !actions.replyDraft &&
       !actions.markRead &&
@@ -100,6 +104,32 @@ export function cleanRule(rule: RuleInput): RuleInput {
       includeChildren: label.includeChildren,
     })),
     replyDraft: null,
+  };
+}
+export function applyRuleTemplate(
+  template: RuleInput,
+  labels: GmailLabel[],
+): RuleInput {
+  const input = cleanRule(template);
+  const mapLabel = (label: { labelId: string; labelName: string }) => {
+    const match = labels.find(
+      (candidate) => candidate.name === label.labelName,
+    );
+    return { labelId: match?.id ?? "", labelName: label.labelName };
+  };
+  return {
+    ...input,
+    choices: input.choices.map((choice) => ({
+      ...choice,
+      actions: {
+        ...choiceActions(choice),
+        labels: choiceActions(choice).labels.map(mapLabel),
+      },
+    })),
+    protectedLabels: input.protectedLabels?.map((label) => ({
+      ...label,
+      ...mapLabel(label),
+    })),
   };
 }
 export function missingDraftChoiceIds(

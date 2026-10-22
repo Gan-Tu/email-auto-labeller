@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanRule,
+  applyRuleTemplate,
   batchChoiceActions,
   newChoice,
   emptyActions,
@@ -45,6 +46,82 @@ const decision = (
   ruleId,
   ruleVersion,
   createdAt: 1,
+});
+describe("reusable rule templates", () => {
+  it("permits actions to be configured after saving the template", () => {
+    const template = rule();
+    template.choices[0].actions = emptyActions();
+    expect(validateRule(template, { template: true })).toBe("");
+    expect(validateRule(template)).toContain("at least one action");
+    template.choices[0].description = "";
+    expect(validateRule(template, { template: true })).toContain(
+      "name and description",
+    );
+  });
+  it("maps label names into the destination mailbox and preserves every other setting", () => {
+    const template = {
+      ...rule(),
+      enabled: false,
+      threshold: 0.95,
+      scope: "thread" as const,
+      protectedLabels: [
+        {
+          labelId: "old-protected",
+          labelName: "Protected",
+          includeChildren: true,
+        },
+      ],
+    };
+    template.choices[0].actions = {
+      labels: [{ labelId: "Label_1", labelName: "Recruiting" }],
+      replyDraft: { body: "Thanks" },
+      markRead: true,
+      forward: { to: "destination@example.com" },
+    };
+    const before = structuredClone(template);
+    const applied = applyRuleTemplate(template, [
+      { id: "new-label", name: "Recruiting" },
+      { id: "new-protected", name: "Protected" },
+    ]);
+    expect(applied).toMatchObject({
+      enabled: false,
+      threshold: 0.95,
+      scope: "thread",
+    });
+    expect(applied.choices[0].actions).toEqual({
+      ...template.choices[0].actions,
+      labels: [{ labelId: "new-label", labelName: "Recruiting" }],
+    });
+    expect(applied.protectedLabels).toEqual([
+      {
+        labelId: "new-protected",
+        labelName: "Protected",
+        includeChildren: true,
+      },
+    ]);
+    expect(validateRule(applied)).toBe("");
+    expect(template).toEqual(before);
+    expect(applied).not.toHaveProperty("email");
+    expect(applied).not.toHaveProperty("version");
+  });
+  it("keeps unmatched mappings visible and blocks creation even when mailbox IDs collide", () => {
+    const template = {
+      ...rule(),
+      protectedLabels: [
+        { labelId: "old", labelName: "Protected", includeChildren: true },
+      ],
+    };
+    const applied = applyRuleTemplate(template, [
+      { id: "Label_1", name: "Unrelated" },
+    ]);
+    expect(applied.choices[0].actions?.labels).toEqual([
+      { labelId: "", labelName: "Recruiting" },
+    ]);
+    expect(applied.protectedLabels).toEqual([
+      { labelId: "", labelName: "Protected", includeChildren: true },
+    ]);
+    expect(validateRule(applied)).toContain("Select a Gmail label");
+  });
 });
 describe("per-rule activity", () => {
   it("keeps separate rules and versions on the same email and replaces only the matching execution", () => {

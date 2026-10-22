@@ -16,6 +16,7 @@ import {
   type GmailLabel,
   type Rule,
   type RuleInput,
+  type RuleTemplate,
   type TestResponse,
   type User,
 } from "./api";
@@ -24,6 +25,7 @@ import { PromptAssistant } from "./PromptAssistant";
 import { ChoiceEditor } from "./ChoiceEditor";
 import {
   cleanRule,
+  applyRuleTemplate,
   actionSummary,
   choiceActions,
   newChoice,
@@ -69,6 +71,13 @@ export function RuleEditor({
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [confirmDelete, setConfirmDelete] = useState(false);
+  const [templates, setTemplates] = useState<RuleTemplate[]>([]),
+    [templatesLoading, setTemplatesLoading] = useState(!rule),
+    [templatesError, setTemplatesError] = useState(""),
+    [templatesReload, setTemplatesReload] = useState(0),
+    [templateBusy, setTemplateBusy] = useState(false),
+    [savedTemplate, setSavedTemplate] = useState(""),
+    [templateNotice, setTemplateNotice] = useState("");
   const [testMode, setTestMode] = useState<"text" | "message">("text"),
     [testInput, setTestInput] = useState(""),
     [testBusy, setTestBusy] = useState(false),
@@ -76,6 +85,25 @@ export function RuleEditor({
     [testError, setTestError] = useState("");
   const testRevision = useRef(0);
   const protectedLabels = form.protectedLabels ?? [];
+  useEffect(() => {
+    if (rule) return;
+    const controller = new AbortController();
+    setTemplatesLoading(true);
+    setTemplatesError("");
+    api<{ templates: RuleTemplate[] }>("/api/rule-templates", {
+      signal: controller.signal,
+    })
+      .then((result) => {
+        if (!controller.signal.aborted) setTemplates(result.templates);
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setTemplatesError(e.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setTemplatesLoading(false);
+      });
+    return () => controller.abort();
+  }, [rule, templatesReload]);
   useEffect(() => {
     const controller = new AbortController();
     setLabelsLoading(true);
@@ -97,6 +125,7 @@ export function RuleEditor({
     testRevision.current += 1;
     setForm((f) => ({ ...f, ...patch }));
     setTestResult(undefined);
+    setTemplateNotice("");
   };
   function validation() {
     return (
@@ -117,6 +146,7 @@ export function RuleEditor({
   }
   async function save(event: React.FormEvent) {
     event.preventDefault();
+    if (busy || testBusy) return;
     const problem = validation();
     if (problem) {
       setError(problem);
@@ -142,6 +172,53 @@ export function RuleEditor({
       setError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+  async function saveTemplate() {
+    if (busy || testBusy) return;
+    const problem = validateRule(form, { template: true });
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    const input = cleanRule(form);
+    setBusy(true);
+    setTemplateBusy(true);
+    setError("");
+    setTemplateNotice("");
+    try {
+      const { template } = await api<{ template: RuleTemplate }>(
+        "/api/rule-templates",
+        post(user, "POST", input),
+      );
+      setTemplates((current) => [
+        template,
+        ...current.filter((item) => item.id !== template.id),
+      ]);
+      setSavedTemplate(JSON.stringify(input));
+      setTemplateNotice(
+        `“${template.name}” saved as a template. Create the rule now or use it later.`,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      setTemplateBusy(false);
+    }
+  }
+  function useTemplate(template: RuleTemplate) {
+    const input = applyRuleTemplate(template, labels);
+    change(input);
+    setError("");
+    if (
+      input.choices.some((choice) =>
+        choiceActions(choice).labels.some((label) => !label.labelId),
+      ) ||
+      input.protectedLabels?.some((label) => !label.labelId)
+    ) {
+      setTemplateNotice(
+        "Template applied. Select this mailbox’s labels for the missing mappings before creating the rule.",
+      );
     }
   }
   async function remove() {
@@ -268,6 +345,7 @@ export function RuleEditor({
                 <button
                   type="button"
                   className="text-button"
+                  disabled={busy || testBusy}
                   onClick={() =>
                     change({
                       name: "Recruiting emails",
@@ -285,6 +363,33 @@ export function RuleEditor({
                 >
                   Recruiting <ArrowRight size={14} />
                 </button>
+                {templates.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    className="text-button"
+                    disabled={busy || testBusy || labelsLoading || !!labelError}
+                    onClick={() => useTemplate(template)}
+                  >
+                    {template.name} <ArrowRight size={14} />
+                  </button>
+                ))}
+                {templatesLoading ? (
+                  <span>Loading saved templates…</span>
+                ) : null}
+                {templatesError ? (
+                  <span className="template-error" role="alert">
+                    Could not load saved templates. {templatesError}{" "}
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={busy || testBusy}
+                      onClick={() => setTemplatesReload((value) => value + 1)}
+                    >
+                      Retry
+                    </button>
+                  </span>
+                ) : null}
               </div>
             ) : null}
             <div className="prompt-editor">
@@ -432,7 +537,9 @@ export function RuleEditor({
                           <option value="">
                             {labelsLoading
                               ? "Loading labels…"
-                              : "Select an existing label"}
+                              : !protection.labelId && protection.labelName
+                                ? `Select a label for ${protection.labelName}`
+                                : "Select an existing label"}
                           </option>
                           {protection.labelId &&
                           !labels.some(
@@ -686,7 +793,14 @@ export function RuleEditor({
             </div>
           </div>
         ) : null}
-        <div className="dialog-actions sticky-actions">
+        {templateNotice ? (
+          <div className="notice" role="status">
+            {templateNotice}
+          </div>
+        ) : null}
+        <div
+          className={`dialog-actions sticky-actions${rule ? "" : " create-rule-actions"}`}
+        >
           <div>
             {rule ? (
               <button
@@ -698,7 +812,9 @@ export function RuleEditor({
                 <Trash2 size={15} /> Delete rule
               </button>
             ) : (
-              <span className="hint">Applies to new emails after saving.</span>
+              <span className="hint">
+                Only created rules process new emails.
+              </span>
             )}
           </div>
           <div className="inline-actions">
@@ -710,11 +826,30 @@ export function RuleEditor({
             >
               Cancel
             </button>
+            {!rule ? (
+              <button
+                type="button"
+                className="secondary template-save"
+                disabled={
+                  busy ||
+                  testBusy ||
+                  templatesLoading ||
+                  savedTemplate === JSON.stringify(cleanRule(form))
+                }
+                onClick={() => void saveTemplate()}
+              >
+                {templateBusy ? "Saving template…" : "Save as Template"}
+              </button>
+            ) : null}
             <button
               className="primary"
               disabled={busy || testBusy || labelsLoading || !!labelError}
             >
-              {busy ? "Saving…" : rule ? "Save rule" : "Create rule"}
+              {busy && !templateBusy
+                ? "Saving…"
+                : rule
+                  ? "Save rule"
+                  : "Create rule"}
             </button>
           </div>
         </div>

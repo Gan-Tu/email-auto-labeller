@@ -31,6 +31,11 @@ import {
 } from "./store.js";
 import { Gmail } from "./gmail.js";
 import { normalizeChoiceActions } from "./rule-behavior.js";
+import {
+  listRuleTemplates,
+  ruleTemplateSchema,
+  saveRuleTemplate,
+} from "./rule-templates.js";
 import { syncAccount, renewAccount } from "./worker.js";
 import { RECRUITING_PROMPT, classifyRules } from "./classifier.js";
 import type { Account, Message, Rule } from "./types.js";
@@ -160,6 +165,16 @@ export function createApp() {
   );
   app.use("/api", requireSession);
   app.post("/api/logout", csrf, logout);
+  app.get("/api/rule-templates", async (req, res) => {
+    res.json({ templates: await listRuleTemplates(req.session!.email) });
+  });
+  app.post("/api/rule-templates", csrf, async (req, res) => {
+    const template = await saveRuleTemplate(
+      req.session!.email,
+      ruleTemplateSchema.parse(req.body),
+    );
+    res.status(201).json({ template });
+  });
   app.get("/api/prompt-assistant/options", (_req, res) =>
     res.json(promptAssistantOptions),
   );

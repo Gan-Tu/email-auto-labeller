@@ -1067,6 +1067,7 @@ td small {
 }
 .template-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   color: #88968c;
@@ -1075,6 +1076,28 @@ td small {
 }
 .template-line .text-button {
   font-size: 11px;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.template-error {
+  color: var(--danger);
+}
+.secondary.template-save {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: transparent;
+}
+.secondary.template-save:hover:not(:disabled) {
+  background: var(--accent-light);
+}
+.create-rule-actions {
+  flex-wrap: wrap;
+}
+.create-rule-actions > .inline-actions {
+  margin-left: auto;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .prompt-editor {
   margin: 0 0 26px;

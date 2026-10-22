@@ -60,6 +60,10 @@ export interface Rule extends RuleInput {
   updatedAt: number;
   lastError?: string | null;
 }
+export interface RuleTemplate extends RuleInput {
+  id: string;
+  createdAt: number;
+}
 export interface TestResponse {
   result: {
     choiceId: string | null;
