@@ -1031,6 +1031,7 @@ td small {
 .field input,
 .field select,
 .action-labels select,
+.action-labels input,
 .field textarea {
   width: 100%;
   padding: 9px 11px;
@@ -1098,6 +1099,110 @@ td small {
   max-width: 100%;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+.template-list-heading,
+.template-card-heading,
+.template-details,
+.template-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.template-list-heading {
+  margin: 30px 0 15px;
+}
+.template-list-heading h2 {
+  font-size: 17px;
+  letter-spacing: -0.3px;
+}
+.template-list-heading > span,
+.template-badge {
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-light);
+  border-radius: 5px;
+  padding: 3px 7px;
+}
+.template-list {
+  display: grid;
+  gap: 12px;
+}
+.template-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 20px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+}
+.builtin-template {
+  background: #f7faf8;
+}
+.template-card-content {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.template-title,
+.template-card-heading h3 {
+  margin: 0;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.template-title:hover {
+  color: var(--accent);
+}
+.template-card-content > p {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin: 9px 0 0;
+}
+.template-details {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.template-card-actions {
+  gap: 12px;
+}
+.template-editor > .field {
+  max-width: 500px;
+}
+.template-label-hint {
+  margin: 16px 0;
+}
+.template-behavior {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+  margin-top: 22px;
+}
+.template-behavior > .check-field {
+  margin-bottom: 25px;
+}
+.template-protection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 10px 0;
+}
+.template-protection .field {
+  flex: 1 1 240px;
+  margin: 0;
+}
+.template-protection > .check-field {
+  margin: 0;
 }
 .prompt-editor {
   margin: 0 0 26px;
@@ -2414,7 +2519,8 @@ select:not([multiple]):disabled {
 .action-labels {
   margin: 8px 0 16px;
 }
-.action-labels select {
+.action-labels select,
+.action-labels input {
   min-width: 0;
   flex: 1;
 }

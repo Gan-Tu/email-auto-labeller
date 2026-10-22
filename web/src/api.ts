@@ -63,6 +63,8 @@ export interface Rule extends RuleInput {
 export interface RuleTemplate extends RuleInput {
   id: string;
   createdAt: number;
+  updatedAt: number;
+  version: number;
 }
 export interface TestResponse {
   result: {

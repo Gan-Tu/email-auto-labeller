@@ -16,22 +16,36 @@ import {
   AlertCircle,
   Pause,
   ChevronRight,
+  BookOpen,
 } from "lucide-react";
-import { api, post, type Account, type Rule, type User } from "./api";
+import {
+  api,
+  post,
+  type Account,
+  type Rule,
+  type RuleInput,
+  type RuleTemplate,
+  type User,
+} from "./api";
 import { AccountSettings } from "./AccountSettings";
 import { DecisionHistory } from "./DecisionHistory";
 import { RuleEditor } from "./RuleEditor";
 import { BatchRuleEditor } from "./BatchRuleEditor";
 import { ruleKey } from "./rules";
-type Tab = "rules" | "activity" | "mailboxes";
+import { Templates } from "./Templates";
+import { TemplateEditor } from "./TemplateEditor";
+type Tab = "rules" | "templates" | "activity" | "mailboxes";
 const tabs = [
   { id: "rules" as const, label: "Rules", icon: SlidersHorizontal },
+  { id: "templates" as const, label: "Templates", icon: BookOpen },
   { id: "activity" as const, label: "Activity", icon: Activity },
   { id: "mailboxes" as const, label: "Mailboxes", icon: Inbox },
 ];
 function readTab(): Tab {
   const value = location.hash.slice(1);
-  return value === "activity" || value === "mailboxes" ? value : "rules";
+  return value === "activity" || value === "mailboxes" || value === "templates"
+    ? value
+    : "rules";
 }
 export function AccountStatus({ account }: { account: Account }) {
   const state = !account.enabled
@@ -64,6 +78,12 @@ export default function App() {
     [selectedAccount, setSelectedAccount] = useState<Account>(),
     [editor, setEditor] = useState<Rule | "new">(),
     [batchRules, setBatchRules] = useState<Rule[]>();
+  const [templateEditor, setTemplateEditor] = useState<{
+    template?: RuleTemplate;
+    initial?: RuleInput;
+  }>();
+  const [ruleTemplate, setRuleTemplate] = useState<RuleInput>();
+  const [templatesRevision, setTemplatesRevision] = useState(0);
   const [selected, setSelected] = useState<string[]>([]),
     [inbox, setInbox] = useState(""),
     [search, setSearch] = useState(""),
@@ -172,6 +192,8 @@ export default function App() {
       setLoaded(false);
       setSelected([]);
       setEditor(undefined);
+      setTemplateEditor(undefined);
+      setRuleTemplate(undefined);
       setBatchRules(undefined);
       setSelectedAccount(undefined);
     } catch (e) {
@@ -247,9 +269,11 @@ export default function App() {
                 <p>
                   {tab === "rules"
                     ? "Turn incoming emails into the right actions."
-                    : tab === "mailboxes"
-                      ? "Manage connections and processing for each inbox."
-                      : "See what each rule decided and what happened next."}
+                    : tab === "templates"
+                      ? "Create and refine reusable starting points for your rules."
+                      : tab === "mailboxes"
+                        ? "Manage connections and processing for each inbox."
+                        : "See what each rule decided and what happened next."}
                 </p>
               </div>
               <div className="inline-actions">
@@ -276,6 +300,13 @@ export default function App() {
                       <Plus size={17} /> Create rule
                     </button>
                   </>
+                ) : tab === "templates" ? (
+                  <button
+                    className="primary"
+                    onClick={() => setTemplateEditor({})}
+                  >
+                    <Plus size={17} /> Create template
+                  </button>
                 ) : tab === "mailboxes" ? (
                   <a className="primary" href="/auth/google">
                     <Plus size={17} /> Connect Gmail
@@ -639,6 +670,21 @@ export default function App() {
                   </div>
                 </div>
               </section>
+            ) : tab === "templates" ? (
+              <Templates
+                user={user}
+                defaultPrompt={defaultPrompt}
+                refreshKey={templatesRevision}
+                canCreateRule={accounts.length > 0}
+                onCreate={() => setTemplateEditor({})}
+                onEdit={(template) => setTemplateEditor({ template })}
+                onCustomize={(initial) => setTemplateEditor({ initial })}
+                onUse={(input) => {
+                  setRuleTemplate(input);
+                  setEditor("new");
+                }}
+                onSaved={setNotice}
+              />
             ) : tab === "activity" ? (
               <DecisionHistory accounts={accounts} />
             ) : (
@@ -722,11 +768,27 @@ export default function App() {
       {editor && user ? (
         <RuleEditor
           rule={editor === "new" ? undefined : editor}
+          initialTemplate={editor === "new" ? ruleTemplate : undefined}
           accounts={accounts}
           defaultPrompt={defaultPrompt}
           user={user}
-          onClose={() => setEditor(undefined)}
+          onClose={() => {
+            setEditor(undefined);
+            setRuleTemplate(undefined);
+            setTemplatesRevision((value) => value + 1);
+          }}
           onSaved={saved}
+        />
+      ) : null}
+      {templateEditor && user ? (
+        <TemplateEditor
+          {...templateEditor}
+          user={user}
+          onClose={() => {
+            setTemplateEditor(undefined);
+            setTemplatesRevision((value) => value + 1);
+          }}
+          onSaved={setNotice}
         />
       ) : null}
       {batchRules && user ? (

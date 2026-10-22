@@ -48,6 +48,24 @@ const decision = (
   createdAt: 1,
 });
 describe("reusable rule templates", () => {
+  it("validates template label names independently of mailbox IDs", () => {
+    const template = cleanRule(rule());
+    template.choices[0].actions!.labels = [
+      { labelId: "", labelName: "Recruiting" },
+    ];
+    template.protectedLabels = [
+      { labelId: "", labelName: "Protected", includeChildren: true },
+    ];
+    expect(validateRule(template, { template: true })).toBe("");
+    expect(validateRule(template)).toContain("Select a Gmail label");
+    template.choices[0].actions!.labels.push({
+      labelId: "",
+      labelName: " Recruiting ",
+    });
+    expect(validateRule(template, { template: true })).toContain("only once");
+    template.choices[0].actions!.labels = [{ labelId: "", labelName: " " }];
+    expect(validateRule(template, { template: true })).toContain("label name");
+  });
   it("permits actions to be configured after saving the template", () => {
     const template = rule();
     template.choices[0].actions = emptyActions();

@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
 vi.mock("../server/store", async (importOriginal) => {
   const collection = (path: string): any => ({
     doc: (id: string) => ({
+      id,
       path: `${path}/${id}`,
       collection: (name: string) => collection(`${path}/${id}/${name}`),
     }),
@@ -35,6 +36,9 @@ vi.mock("../server/store", async (importOriginal) => {
           }),
           create: (ref: any, value: any) =>
             state.docs.set(ref.path, structuredClone(value)),
+          set: (ref: any, value: any) =>
+            state.docs.set(ref.path, structuredClone(value)),
+          delete: (ref: any) => state.docs.delete(ref.path),
         });
       },
     },
@@ -56,6 +60,7 @@ import { createApp } from "../server/app";
 import { config } from "../server/config";
 import { editableRuleSchema } from "../server/rules";
 import { ruleTemplateSchema } from "../server/rule-templates";
+import { hash } from "../server/crypto";
 const app = createApp();
 const input = {
   name: "Work opportunities",
@@ -149,7 +154,7 @@ it("validates templates before saving", async () => {
         { ...input.choices[0], actions: { forward: { to: "invalid" } } },
       ],
     },
-    { ...input, protectedLabels: [{ labelId: "", labelName: "Missing" }] },
+    { ...input, protectedLabels: [{ labelId: "", labelName: "" }] },
   ])
     expect((await save(body)).status).toBe(400);
   expect(state.docs.size).toBe(0);
@@ -174,4 +179,188 @@ it("trims saved fields and keeps action/protection limits", () => {
   expect(ruleTemplateSchema.safeParse({ ...input, threshold: 1 }).success).toBe(
     false,
   );
+});
+
+const modify = (
+  id: string,
+  method: "patch" | "delete",
+  body: unknown,
+  token = "test-csrf",
+) =>
+  request(app)
+    [method](`/api/rule-templates/${id}`)
+    .set("Host", new URL(config.baseUrl).host)
+    .set("Origin", config.baseUrl)
+    .set("X-CSRF-Token", token)
+    .send(body);
+
+it("creates portable templates using only label names, while rules still require mailbox IDs", async () => {
+  const portable = {
+    ...input,
+    choices: [
+      {
+        ...input.choices[0],
+        actions: { labels: [{ labelName: "Recruiting" }] },
+      },
+    ],
+    protectedLabels: [{ labelName: "Protected", includeChildren: true }],
+  };
+  const response = await save(portable);
+  expect(response.status).toBe(201);
+  expect(response.body.template.choices[0].actions.labels).toEqual([
+    { labelId: "", labelName: "Recruiting" },
+  ]);
+  expect(editableRuleSchema.safeParse(portable).success).toBe(false);
+  expect(state.gmail).not.toHaveBeenCalled();
+  const duplicateLabels = {
+    ...portable,
+    protectedLabels: [{ labelName: "Protected" }, { labelName: " Protected " }],
+  };
+  expect((await save(duplicateLabels)).status).toBe(400);
+});
+it("edits a template in place and preserves existing rules", async () => {
+  const { template } = (await save()).body;
+  const rulePath = "accounts/mailbox/rules/existing";
+  state.docs.set(rulePath, structuredClone(input));
+  const response = await modify(template.id, "patch", {
+    ...input,
+    name: "Updated template",
+    threshold: 0.7,
+    expectedVersion: 1,
+  });
+  expect(response.status).toBe(200);
+  expect(response.body.template).toMatchObject({
+    id: template.id,
+    name: "Updated template",
+    threshold: 0.7,
+    createdAt: template.createdAt,
+    version: 2,
+  });
+  expect((await list()).body.templates).toEqual([response.body.template]);
+  expect(state.docs.get(rulePath)).toEqual(input);
+  expect(state.createRule).not.toHaveBeenCalled();
+  expect(state.gmail).not.toHaveBeenCalled();
+});
+it("prevents stale edits and deletes from overwriting newer changes", async () => {
+  const { template } = (await save()).body;
+  await modify(template.id, "patch", {
+    ...input,
+    name: "Latest",
+    expectedVersion: 1,
+  });
+  expect(
+    (await modify(template.id, "patch", { ...input, expectedVersion: 1 }))
+      .status,
+  ).toBe(409);
+  expect(
+    (await modify(template.id, "delete", { expectedVersion: 1 })).status,
+  ).toBe(409);
+  expect((await list()).body.templates[0].name).toBe("Latest");
+});
+it("requires ownership, sign-in, CSRF, and a valid version for edits and deletes", async () => {
+  const { template } = (await save()).body;
+  for (const method of ["patch", "delete"] as const) {
+    const body = { ...(method === "patch" ? input : {}), expectedVersion: 1 };
+    expect((await modify(template.id, method, body, "wrong")).status).toBe(403);
+    expect(
+      (
+        await modify(template.id, method, {
+          ...body,
+          expectedVersion: undefined,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await modify(template.id, method, {
+          ...body,
+          owner: "owner@example.com",
+        })
+      ).status,
+    ).toBe(400);
+    state.email = "other@example.com";
+    expect((await modify(template.id, method, body)).status).toBe(404);
+    state.email = null;
+    expect((await modify(template.id, method, body)).status).toBe(401);
+    state.email = "owner@example.com";
+  }
+  expect((await list()).body.templates).toHaveLength(1);
+});
+it("deletes only the selected template and allows it to be recreated", async () => {
+  const { template } = (await save()).body;
+  const other = (await save({ ...input, name: "Keep this" })).body.template;
+  const rulePath = "accounts/mailbox/rules/existing";
+  state.docs.set(rulePath, structuredClone(input));
+  expect(
+    (await modify(template.id, "delete", { expectedVersion: 1 })).status,
+  ).toBe(200);
+  expect((await list()).body.templates).toEqual([other]);
+  expect(state.docs.get(rulePath)).toEqual(input);
+  const recreated = (await save()).body.template;
+  expect(recreated.id).not.toBe(template.id);
+  expect((await list()).body.templates).toHaveLength(2);
+});
+it("keeps create retries correct after a template's content is edited", async () => {
+  const original = (await save()).body.template;
+  const changed = { ...input, name: "Edited" };
+  await modify(original.id, "patch", { ...changed, expectedVersion: 1 });
+  expect((await save(changed)).body.template.id).toBe(original.id);
+  const copy = (await save()).body.template;
+  expect(copy.id).not.toBe(original.id);
+  expect(copy.name).toBe(input.name);
+  expect((await save()).body.template.id).toBe(copy.id);
+});
+it("supports templates saved before versions were introduced", async () => {
+  const fields = ruleTemplateSchema.parse(input);
+  const template = {
+    ...fields,
+    id: hash(JSON.stringify(fields)),
+    createdAt: 100,
+  };
+  state.docs.set(
+    `users/${hash("owner@example.com")}/ruleTemplates/${template.id}`,
+    template,
+  );
+  expect((await list()).body.templates[0]).toMatchObject({
+    version: 1,
+    updatedAt: template.createdAt,
+  });
+  expect((await save()).body.template.id).toBe(template.id);
+  expect((await list()).body.templates).toHaveLength(1);
+  expect(
+    (
+      await modify(template.id, "patch", {
+        ...input,
+        name: "Legacy edited",
+        expectedVersion: 1,
+      })
+    ).status,
+  ).toBe(200);
+  expect((await save()).body.template.id).not.toBe(template.id);
+});
+it("leaves saved templates intact when edits fail validation or storage", async () => {
+  const { template } = (await save()).body;
+  expect(
+    (
+      await modify(template.id, "patch", {
+        ...input,
+        name: "",
+        expectedVersion: 1,
+      })
+    ).status,
+  ).toBe(400);
+  state.fail = true;
+  expect(
+    (
+      await modify(template.id, "patch", {
+        ...input,
+        name: "Changed",
+        expectedVersion: 1,
+      })
+    ).status,
+  ).toBe(503);
+  expect(
+    (await modify(template.id, "delete", { expectedVersion: 1 })).status,
+  ).toBe(503);
+  expect((await list()).body.templates).toEqual([template]);
 });

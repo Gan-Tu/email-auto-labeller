@@ -35,6 +35,11 @@ import {
   listRuleTemplates,
   ruleTemplateSchema,
   saveRuleTemplate,
+  updateRuleTemplate,
+  deleteRuleTemplate,
+  updateRuleTemplateSchema,
+  templateVersionSchema,
+  templateIdSchema,
 } from "./rule-templates.js";
 import { syncAccount, renewAccount } from "./worker.js";
 import { RECRUITING_PROMPT, classifyRules } from "./classifier.js";
@@ -174,6 +179,28 @@ export function createApp() {
       ruleTemplateSchema.parse(req.body),
     );
     res.status(201).json({ template });
+  });
+  app.patch("/api/rule-templates/:id", csrf, async (req, res) => {
+    const { expectedVersion, ...input } = updateRuleTemplateSchema.parse(
+      req.body,
+    );
+    res.json({
+      template: await updateRuleTemplate(
+        req.session!.email,
+        templateIdSchema.parse(req.params.id),
+        input,
+        expectedVersion,
+      ),
+    });
+  });
+  app.delete("/api/rule-templates/:id", csrf, async (req, res) => {
+    const { expectedVersion } = templateVersionSchema.parse(req.body);
+    await deleteRuleTemplate(
+      req.session!.email,
+      templateIdSchema.parse(req.params.id),
+      expectedVersion,
+    );
+    res.json({ ok: true });
   });
   app.get("/api/prompt-assistant/options", (_req, res) =>
     res.json(promptAssistantOptions),

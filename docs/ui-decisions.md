@@ -1,8 +1,9 @@
 # UI design decisions
 
-The interface is organized around three tasks: defining rules, inspecting decisions, and managing mailbox connections.
+The interface is organized around defining rules, managing reusable templates, inspecting decisions, and managing mailbox connections.
 
 - **Rules** is the default workspace. A desktop navigation rail becomes a bottom tab bar on mobile.
+- **Templates** provides private template creation, editing, search, and deletion. Its editor uses portable label names and needs no mailbox connection. A template can start a new rule; editing or deleting it never changes existing rules. The built-in Recruiting starter can be customized as a separate saved template.
 - The editor keeps the classification prompt freeform and makes possible answers structured: choice name, meaning, and a Gmail label from the selected mailbox.
 - Label menus keep pinned `!` names first, group parents with nested labels, and sort dates/numbers naturally. Decorative emoji are ignored for ordering while displayed names and label IDs remain unchanged.
 - Every rule exposes protected Gmail labels and optional reply drafts. Drafts select explicit choices and editable plain text; removed choices require correction before saving, and batch replacement requires confirmation before disabling drafts.

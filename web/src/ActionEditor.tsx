@@ -5,19 +5,24 @@ export function ActionEditor({
   labels = [],
   disabled = false,
   showLabels = true,
+  template = false,
 }: {
   actions: ChoiceActions;
   onChange: (actions: ChoiceActions) => void;
   labels?: GmailLabel[];
   disabled?: boolean;
   showLabels?: boolean;
+  template?: boolean;
 }) {
   const update = (patch: Partial<ChoiceActions>) =>
     onChange({ ...actions, ...patch });
   return (
     <fieldset className="match-actions" disabled={disabled}>
       <legend>
-        On match <small>Choose at least one action</small>
+        On match{" "}
+        <small>
+          {template ? "Optional in templates" : "Choose at least one action"}
+        </small>
       </legend>
       <label className="check-field">
         <input
@@ -36,48 +41,67 @@ export function ActionEditor({
           <div className="action-labels">
             {actions.labels.map((selected, index) => (
               <div className="inline-actions" key={index}>
-                <select
-                  aria-label={`Gmail label ${index + 1}`}
-                  required
-                  value={selected.labelId}
-                  onChange={(e) =>
-                    update({
-                      labels: actions.labels.map((item, i) =>
-                        i === index
-                          ? {
-                              labelId: e.target.value,
-                              labelName:
-                                labels.find((l) => l.id === e.target.value)
-                                  ?.name ?? "",
-                            }
-                          : item,
-                      ),
-                    })
-                  }
-                >
-                  <option value="">
-                    {!selected.labelId && selected.labelName
-                      ? `Select a label for ${selected.labelName}`
-                      : "Select an existing label"}
-                  </option>
-                  {selected.labelId &&
-                    !labels.some((l) => l.id === selected.labelId) && (
-                      <option value={selected.labelId}>
-                        {selected.labelName} (unavailable)
-                      </option>
-                    )}
-                  {labels.map((label) => (
-                    <option
-                      key={label.id}
-                      value={label.id}
-                      disabled={actions.labels.some(
-                        (item, i) => i !== index && item.labelId === label.id,
-                      )}
-                    >
-                      {label.name}
+                {template ? (
+                  <input
+                    aria-label={`Gmail label name ${index + 1}`}
+                    required
+                    maxLength={200}
+                    placeholder="e.g. Work/Recruiting"
+                    value={selected.labelName}
+                    onChange={(e) =>
+                      update({
+                        labels: actions.labels.map((item, i) =>
+                          i === index
+                            ? { labelId: "", labelName: e.target.value }
+                            : item,
+                        ),
+                      })
+                    }
+                  />
+                ) : (
+                  <select
+                    aria-label={`Gmail label ${index + 1}`}
+                    required
+                    value={selected.labelId}
+                    onChange={(e) =>
+                      update({
+                        labels: actions.labels.map((item, i) =>
+                          i === index
+                            ? {
+                                labelId: e.target.value,
+                                labelName:
+                                  labels.find((l) => l.id === e.target.value)
+                                    ?.name ?? "",
+                              }
+                            : item,
+                        ),
+                      })
+                    }
+                  >
+                    <option value="">
+                      {!selected.labelId && selected.labelName
+                        ? `Select a label for ${selected.labelName}`
+                        : "Select an existing label"}
                     </option>
-                  ))}
-                </select>
+                    {selected.labelId &&
+                      !labels.some((l) => l.id === selected.labelId) && (
+                        <option value={selected.labelId}>
+                          {selected.labelName} (unavailable)
+                        </option>
+                      )}
+                    {labels.map((label) => (
+                      <option
+                        key={label.id}
+                        value={label.id}
+                        disabled={actions.labels.some(
+                          (item, i) => i !== index && item.labelId === label.id,
+                        )}
+                      >
+                        {label.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   type="button"
                   className="text-button"

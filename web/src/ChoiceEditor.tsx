@@ -9,6 +9,7 @@ export function ChoiceEditor({
   labelsLoading = false,
   showLabels = true,
   disabled = false,
+  template = false,
 }: {
   choices: RuleChoice[];
   onChange: (choices: RuleChoice[]) => void;
@@ -16,6 +17,7 @@ export function ChoiceEditor({
   labelsLoading?: boolean;
   showLabels?: boolean;
   disabled?: boolean;
+  template?: boolean;
 }) {
   const update = (id: string, change: Partial<RuleChoice>) =>
     onChange(choices.map((c) => (c.id === id ? { ...c, ...change } : c)));
@@ -25,8 +27,9 @@ export function ChoiceEditor({
         <div>
           <h3>Multiple-choice outputs</h3>
           <p className="hint">
-            One choice is selected per rule. Configure one or more actions for
-            each match.
+            {template
+              ? "Define each possible match. Actions can be configured now or when creating a rule."
+              : "One choice is selected per rule. Configure one or more actions for each match."}
           </p>
         </div>
       </div>
@@ -80,6 +83,7 @@ export function ChoiceEditor({
               labels={labels}
               showLabels={showLabels}
               disabled={disabled || labelsLoading}
+              template={template}
             />
           </div>
         </div>

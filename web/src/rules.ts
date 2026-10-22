@@ -13,11 +13,44 @@ export function newChoice(): RuleChoice {
     actions: emptyActions(),
   };
 }
+export function newRuleInput(): RuleInput {
+  return {
+    name: "",
+    prompt: "",
+    enabled: true,
+    threshold: 0.8,
+    scope: "message",
+    choices: [newChoice()],
+    protectedLabels: [],
+    replyDraft: null,
+  };
+}
+export function recruitingTemplate(prompt: string): RuleInput {
+  return {
+    ...newRuleInput(),
+    name: "Recruiting emails",
+    prompt,
+    choices: [
+      {
+        ...newChoice(),
+        id: "recruiting",
+        name: "Recruiting",
+        description:
+          "Genuine, personally directed outreach or follow-up about recruiting the mailbox owner for an employment opportunity.",
+      },
+    ],
+  };
+}
 export function validateRule(
   rule: RuleInput,
   options: { template?: boolean } = {},
 ) {
-  if (!rule.name.trim()) return "Give this rule a name.";
+  if (!rule.name.trim())
+    return options.template
+      ? "Give this template a name."
+      : "Give this rule a name.";
+  const labelKey = (label: { labelId: string; labelName: string }) =>
+    options.template ? label.labelName.trim() : label.labelId;
   if (rule.prompt.trim().length < 20 || rule.prompt.length > 6000)
     return "Use between 20 and 6,000 characters for the classification prompt.";
   if (!rule.choices.length || rule.choices.length > 12)
@@ -34,12 +67,11 @@ export function validateRule(
       !actions.forward
     )
       return `Choose at least one action for ${choice.name}.`;
-    if (actions.labels.some((label) => !label.labelId))
-      return "Select a Gmail label for every enabled label action.";
-    if (
-      new Set(actions.labels.map((label) => label.labelId)).size !==
-      actions.labels.length
-    )
+    if (actions.labels.some((label) => !labelKey(label)))
+      return options.template
+        ? "Enter a label name for every enabled label action."
+        : "Select a Gmail label for every enabled label action.";
+    if (new Set(actions.labels.map(labelKey)).size !== actions.labels.length)
       return "Select each label only once per choice.";
     if (
       actions.replyDraft &&
@@ -55,12 +87,11 @@ export function validateRule(
   }
   const protectedLabels = rule.protectedLabels ?? [];
   if (protectedLabels.length > 50) return "Use at most 50 protected labels.";
-  if (protectedLabels.some((label) => !label.labelId))
-    return "Choose a Gmail label for every protected label row.";
-  if (
-    new Set(protectedLabels.map((label) => label.labelId)).size !==
-    protectedLabels.length
-  )
+  if (protectedLabels.some((label) => !labelKey(label)))
+    return options.template
+      ? "Enter a name for every protected label."
+      : "Choose a Gmail label for every protected label row.";
+  if (new Set(protectedLabels.map(labelKey)).size !== protectedLabels.length)
     return "Select each protected label only once.";
   if (rule.replyDraft) {
     if (!rule.replyDraft.choiceIds.length)

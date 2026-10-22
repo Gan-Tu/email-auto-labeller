@@ -29,13 +29,14 @@ import {
   actionSummary,
   choiceActions,
   newChoice,
+  newRuleInput,
+  recruitingTemplate,
   validateRule,
 } from "./rules";
 import { sortLabels } from "./labels";
-const recruitingDescription =
-  "Genuine, personally directed outreach or follow-up about recruiting the mailbox owner for an employment opportunity.";
 export function RuleEditor({
   rule,
+  initialTemplate,
   accounts,
   defaultPrompt,
   user,
@@ -43,6 +44,7 @@ export function RuleEditor({
   onSaved,
 }: {
   rule?: Rule;
+  initialTemplate?: RuleInput;
   accounts: Account[];
   defaultPrompt: string;
   user: User;
@@ -53,16 +55,9 @@ export function RuleEditor({
   const [form, setForm] = useState<RuleInput>(() =>
     rule
       ? cleanRule(rule)
-      : {
-          name: "",
-          prompt: "",
-          enabled: true,
-          threshold: 0.8,
-          scope: "message",
-          choices: [newChoice()],
-          protectedLabels: [],
-          replyDraft: null,
-        },
+      : initialTemplate
+        ? cleanRule(initialTemplate)
+        : newRuleInput(),
   );
   const [labels, setLabels] = useState<GmailLabel[]>([]),
     [labelsLoading, setLabelsLoading] = useState(true),
@@ -84,6 +79,7 @@ export function RuleEditor({
     [testResult, setTestResult] = useState<TestResponse>(),
     [testError, setTestError] = useState("");
   const testRevision = useRef(0);
+  const initialTemplatePending = useRef(!!initialTemplate);
   const protectedLabels = form.protectedLabels ?? [];
   useEffect(() => {
     if (rule) return;
@@ -112,7 +108,14 @@ export function RuleEditor({
     api<{ labels: GmailLabel[] }>(`${mailboxPath(email)}/labels`, {
       signal: controller.signal,
     })
-      .then((r) => setLabels(sortLabels(r.labels)))
+      .then((r) => {
+        if (controller.signal.aborted) return;
+        setLabels(sortLabels(r.labels));
+        if (initialTemplatePending.current) {
+          initialTemplatePending.current = false;
+          setForm((current) => applyRuleTemplate(current, r.labels));
+        }
+      })
       .catch((e) => {
         if (!controller.signal.aborted) setLabelError(e.message);
       })
@@ -346,20 +349,7 @@ export function RuleEditor({
                   type="button"
                   className="text-button"
                   disabled={busy || testBusy}
-                  onClick={() =>
-                    change({
-                      name: "Recruiting emails",
-                      prompt: defaultPrompt,
-                      choices: [
-                        {
-                          ...newChoice(),
-                          id: "recruiting",
-                          name: "Recruiting",
-                          description: recruitingDescription,
-                        },
-                      ],
-                    })
-                  }
+                  onClick={() => change(recruitingTemplate(defaultPrompt))}
                 >
                   Recruiting <ArrowRight size={14} />
                 </button>
