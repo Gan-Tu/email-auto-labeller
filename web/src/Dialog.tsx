@@ -1,5 +1,17 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { X } from "lucide-react";
+
+function isBackdrop(event: MouseEvent<HTMLDialogElement>) {
+  if (event.target !== event.currentTarget) return false;
+  const { left, right, top, bottom } =
+    event.currentTarget.getBoundingClientRect();
+  return (
+    event.clientX < left ||
+    event.clientX > right ||
+    event.clientY < top ||
+    event.clientY > bottom
+  );
+}
 export function Dialog({
   title,
   subtitle,
@@ -16,6 +28,7 @@ export function Dialog({
   busy?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const pointerStartedOutside = useRef(false);
   useEffect(() => {
     const element = ref.current;
     element?.showModal();
@@ -28,6 +41,17 @@ export function Dialog({
       ref={ref}
       className={`settings-dialog ${wide ? "wide-dialog" : ""}`}
       aria-labelledby="dialog-title"
+      onPointerDown={(event) => {
+        pointerStartedOutside.current = event.button === 0 && isBackdrop(event);
+      }}
+      onPointerCancel={() => {
+        pointerStartedOutside.current = false;
+      }}
+      onClick={(event) => {
+        const dismiss = pointerStartedOutside.current && isBackdrop(event);
+        pointerStartedOutside.current = false;
+        if (dismiss && !busy) onClose();
+      }}
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) onClose();
